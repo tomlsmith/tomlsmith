@@ -1,0 +1,21 @@
+[package]
+name = "tomlsmith"
+description = "A lossless, error-tolerant TOML toolchain"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+rowan.workspace = true
+text-size.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest = "1.9.0"
+static_assertions = "1.1.0"
+
+[lints]
+workspace = true

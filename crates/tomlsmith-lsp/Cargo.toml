@@ -1,0 +1,25 @@
+[package]
+name = "tomlsmith-lsp"
+description = "Language Server Protocol adapter for TomlSmith"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "tomlsmith-lsp"
+path = "src/main.rs"
+
+[dependencies]
+lsp-server.workspace = true
+lsp-types.workspace = true
+serde_json.workspace = true
+tomlsmith.workspace = true
+
+[lints]
+workspace = true

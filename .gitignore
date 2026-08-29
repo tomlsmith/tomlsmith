@@ -1,0 +1,9 @@
+/target/
+.DS_Store
+
+# Local research, decision records, plans, and agent context are not release artifacts.
+/CONTEXT.md
+/docs/adr/
+/docs/plans/
+/docs/research/
+/docs/roadmap.md

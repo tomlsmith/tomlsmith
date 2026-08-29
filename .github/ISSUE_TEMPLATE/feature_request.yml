@@ -1,0 +1,37 @@
+name: Feature request
+description: Propose a focused language, tooling, or integration capability
+title: "feature: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the user problem before proposing an interface.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Include the affected library, CLI, or LSP surface.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility considerations
+      description: Note TOML version, public API, formatter, diagnostics, or protocol effects.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched for an existing proposal.
+          required: true
+        - label: I have separated the desired outcome from implementation details.
+          required: true

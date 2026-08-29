@@ -1,0 +1,21 @@
+Root = Statement*
+
+Statement = KeyValue | Table | ArrayTable
+
+KeyValue = Key '=' Value
+
+Key = KeySegment ('.' KeySegment)*
+
+KeySegment = 'bare' | 'basic_string' | 'literal_string'
+
+Value = Array | InlineTable | Scalar
+
+Scalar = 'bare' | 'basic_string' | 'literal_string'
+
+Array = '[' Value* ']'
+
+InlineTable = '{' KeyValue* '}'
+
+Table = '[' Key ']'
+
+ArrayTable = '[' '[' Key ']' ']'

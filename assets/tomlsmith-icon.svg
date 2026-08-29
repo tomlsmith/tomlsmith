@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
+  <title id="title">TomlSmith icon</title>
+  <desc id="description">A blueprint-white geometric anvil with an orange equals sign and forge spark on a navy rounded square.</desc>
+  <rect width="896" height="896" x="64" y="64" fill="#103653" rx="208"/>
+  <path fill="#F4F7FB" d="M182 335c0-16 13-29 29-29h602c16 0 29 13 29 29v53c0 19-10 36-26 46l-104 63c-24 15-38 40-38 68v92h49c12 0 23 5 31 15l64 79c16 20 2 49-24 49H230c-26 0-40-29-24-49l64-79c8-10 19-15 31-15h49v-92c0-28-14-53-38-68l-104-63c-16-10-26-27-26-46v-53Z"/>
+  <rect width="176" height="44" x="424" y="496" fill="#E36B3A" rx="22"/>
+  <rect width="176" height="44" x="424" y="570" fill="#E36B3A" rx="22"/>
+  <path fill="#E36B3A" d="m512 199 18 31 31 18-31 18-18 31-18-31-31-18 31-18 18-31Z"/>
+</svg>
+

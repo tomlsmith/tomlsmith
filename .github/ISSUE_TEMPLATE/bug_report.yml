@@ -1,0 +1,70 @@
+name: Bug report
+description: Report reproducible incorrect behavior in TomlSmith
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a bug. Do not disclose security vulnerabilities here; use the private security advisory link in the issue chooser.
+  - type: input
+    id: revision
+    attributes:
+      label: TomlSmith version or revision
+      placeholder: v0.x.y or git commit
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      options:
+        - Rust library
+        - CLI
+        - LSP
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: toml-version
+    attributes:
+      label: TOML mode
+      options:
+        - TOML 1.0
+        - TOML 1.1
+        - Unknown or not applicable
+    validations:
+      required: true
+  - type: textarea
+    id: input
+    attributes:
+      label: Minimal TOML input
+      description: Remove credentials and private data before pasting.
+      render: toml
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include diagnostics, exit status, or logs where useful.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, architecture, Rust version, client version, and other relevant details.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched for an existing report.
+          required: true
+        - label: This report does not contain a security vulnerability or private data.
+          required: true

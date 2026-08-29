@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Check generated syntax wrappers
+        run: cargo run --package xtask -- codegen --check
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --workspace --all-features
+
+      - name: Install the declared minimum Rust version
+        run: rustup toolchain install 1.85.1 --profile minimal
+
+      - name: Check the workspace on the minimum Rust version
+        run: cargo +1.85.1 check --workspace --all-targets --all-features
+
+      - name: Check that Rowan is absent from the public API
+        run: bash .github/scripts/check-rowan-api.sh
+
+  toml-test:
+    name: TOML conformance
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 1.19.13
+          cache: false
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run TOML 1.0 and 1.1 conformance
+        run: bash tools/toml-test/run.sh
+
+      - name: Upload conformance reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: toml-test-reports
+          path: target/toml-test/v2.2.0/reports/*.json
