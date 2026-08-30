@@ -170,8 +170,12 @@ async function checkPackageManifests(): Promise<string> {
   if (rustCli === undefined) {
     throw new Error("cargo metadata did not contain tomlsmith-cli");
   }
-  if (rustCli.publish?.length !== 0) {
-    errors.push("crates/tomlsmith-cli must remain publish = false");
+  if (
+    rustCli.publish === null ||
+    rustCli.publish.length !== 1 ||
+    rustCli.publish[0] !== "crates-io"
+  ) {
+    errors.push("crates/tomlsmith-cli must publish only to crates-io");
   }
 
   const cliManifest = await readPackageManifest(

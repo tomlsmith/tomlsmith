@@ -8,8 +8,6 @@
 
 **在 Rust、命令行或编辑器中解析、检查和格式化 TOML 1.0 与 1.1。**
 
-> **状态：** pre-alpha。命令行接口、Rust API 和格式化行为仍可能调整。
-
 ## 主要能力
 
 在终端和 CI 中：
@@ -30,29 +28,27 @@ TomlSmith 通过 TOML 1.0 与 1.1 的全部 1,360 个 `toml-test` 解码用例�
 
 ## 快速开始
 
-首个公开版本将以 npm 作为 CLI 的主要安装入口：
+从 crates.io 安装原生 CLI：
 
 ```bash
-pnpm add --save-dev @tomlsmith/cli
-pnpm exec tomlsmith check Cargo.toml
-pnpm exec tomlsmith fmt Cargo.toml
-pnpm exec tomlsmith fmt --check Cargo.toml
-pnpm exec tomlsmith parse Cargo.toml
+cargo install tomlsmith-cli --version '=0.1.0' --locked
+tomlsmith check Cargo.toml
+tomlsmith fmt Cargo.toml
+tomlsmith fmt --check Cargo.toml
+tomlsmith parse Cargo.toml
 ```
 
 默认使用 TOML 1.1；需要时可以显式选择 TOML 1.0：
 
 ```bash
-pnpm exec tomlsmith --toml-version 1.0 check Cargo.toml
+tomlsmith --toml-version 1.0 check Cargo.toml
 ```
 
 为兼容现有编辑器生态，各入口的默认值并不完全相同：LSP 与 VS Code 扩展默认使用 TOML 1.0。完整矩阵和接入规则见 [TOML 版本策略](docs/version-policy.md)。
 
-所有命令都可以读取文件路径或使用 `-` 从标准输入读取。运行 `pnpm exec tomlsmith --help` 可列出全部命令与参数。`@tomlsmith/cli` 要求 Node.js 22.12 或更新版本；它会安装当前平台的原生可执行文件，不运行安装期下载脚本。
+所有命令都可以读取文件路径或使用 `-` 从标准输入读取。运行 `tomlsmith --help` 可列出全部命令与参数。仓库仍维护面向 Node.js 使用者的可选 npm wrapper，但 CLI 和其他 TomlSmith 仓库都不依赖它。
 
-首次 npm 发布前，可以在源码检出中通过 `cargo run -p tomlsmith-cli -- <参数>` 运行私有 Rust adapter。
-
-预览阶段的平台矩阵、Rust MSRV 与平台变更规则见[支持策略](docs/support-policy.md)。
+平台矩阵、Rust MSRV 与平台变更规则见[支持策略](docs/support-policy.md)。
 
 ## 在 Rust 中使用
 
@@ -67,7 +63,7 @@ assert!(document.diagnostics().is_empty());
 
 `tomlsmith-lsp` 通过 stdio 实现 Language Server Protocol。[TomlSmith for VS Code](https://github.com/tomlsmith/vscode-plugin) 扩展会在 VS Code 中启动它；其他编辑器可以把它配置为通用 LSP 服务器。
 
-当前尚未提供基于 Schema 的补全和代码操作。
+已实现的语言服务器能力不包括基于 Schema 的补全和代码操作。
 
 ## 相关项目
 

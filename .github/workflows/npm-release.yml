@@ -1,14 +1,18 @@
 name: npm release
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact npm package version to publish
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: npm-release-${{ github.ref }}
+  group: npm-release-${{ inputs.version }}
   cancel-in-progress: false
 
 env:
@@ -47,8 +51,8 @@ jobs:
         shell: bash
         run: |
           package_version=$(node -p "require('./npm/cli/package.json').version")
-          if [[ "v${package_version}" != "${GITHUB_REF_NAME}" ]]; then
-            echo "tag ${GITHUB_REF_NAME} does not match npm version ${package_version}" >&2
+          if [[ "${package_version}" != "${{ inputs.version }}" ]]; then
+            echo "requested version ${{ inputs.version }} does not match npm version ${package_version}" >&2
             exit 1
           fi
           echo "version=${package_version}" >> "${GITHUB_OUTPUT}"

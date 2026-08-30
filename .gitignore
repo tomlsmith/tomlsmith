@@ -6,11 +6,21 @@
 /npm/platforms/*/bin/
 /npm/platforms/*/LICENSE
 /npm/dist/
+*.crate
+*.tar.gz
 *.tgz
+*.zip
+*.vsix
+/SHA256SUMS
+/coverage/
+*.log
 .DS_Store
 
 # Local research, decision records, plans, and agent context are not release artifacts.
 /CONTEXT.md
 /docs/adr/
+/docs/audits/
 /docs/plans/
 /docs/research/
+/docs/reviews/
+/docs/roadmap.md

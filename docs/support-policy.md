@@ -1,6 +1,6 @@
 # Support policy
 
-TomlSmith is pre-alpha software. This page defines which environments are continuously checked and which binary artifacts the first public preview is designed to ship. It does not turn the 0.x API or formatter layout into a stability promise.
+This page defines which environments are continuously checked and the intended distribution targets. Semantic-versioning rules for the 0.x API and formatter behavior remain independent of platform support.
 
 ## Rust toolchain
 
@@ -10,9 +10,9 @@ Raising the MSRV requires a changelog entry and a 0.x minor release. A dependenc
 
 ## Runtime and binary targets
 
-| Surface | Continuously checked environments | Preview distribution targets |
+| Surface | Continuously checked environments | Distribution targets |
 | --- | --- | --- |
-| Rust library and native adapters | Linux x64, current macOS, current Windows; Rust 1.85.0 workspace check | crates.io source packages for `tomlsmith` and `tomlsmith-lsp` |
+| Rust library and native adapters | Linux x64, current macOS, current Windows; Rust 1.85.0 workspace check | crates.io source packages for `tomlsmith`, `tomlsmith-cli`, and `tomlsmith-lsp` |
 | `@tomlsmith/cli` | clean packed-tarball installation and execution on Linux, macOS, and Windows | macOS arm64/x64, Linux arm64/x64 musl, Windows x64 |
 | GitHub Release binaries | archive build plus CLI/LSP process smoke on every release target | macOS arm64/x64, Linux arm64/x64 musl, Windows x64 |
 | Browser core | `wasm32-unknown-unknown` build and real generated-WASM analysis/formatting tests | Playground static site |

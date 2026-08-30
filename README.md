@@ -8,8 +8,6 @@
 
 **Parse, check, and format TOML 1.0 and 1.1 from Rust, the command line, or an editor.**
 
-> **Status:** Pre-alpha. The command-line interface, Rust API, and formatter behavior may still change.
-
 ## Features
 
 In the terminal and CI:
@@ -30,29 +28,27 @@ TomlSmith passes all 1,360 `toml-test` decoder cases for TOML 1.0 and 1.1. See [
 
 ## Quick start
 
-The first public release will use npm as the primary CLI installation path:
+Install the native CLI from crates.io:
 
 ```bash
-pnpm add --save-dev @tomlsmith/cli
-pnpm exec tomlsmith check Cargo.toml
-pnpm exec tomlsmith fmt Cargo.toml
-pnpm exec tomlsmith fmt --check Cargo.toml
-pnpm exec tomlsmith parse Cargo.toml
+cargo install tomlsmith-cli --version '=0.1.0' --locked
+tomlsmith check Cargo.toml
+tomlsmith fmt Cargo.toml
+tomlsmith fmt --check Cargo.toml
+tomlsmith parse Cargo.toml
 ```
 
 TOML 1.1 is the default. Select TOML 1.0 explicitly when needed:
 
 ```bash
-pnpm exec tomlsmith --toml-version 1.0 check Cargo.toml
+tomlsmith --toml-version 1.0 check Cargo.toml
 ```
 
 Defaults intentionally differ for editor compatibility: the LSP and VS Code extension default to TOML 1.0. See the [TOML version policy](docs/version-policy.md) for the complete matrix and integration rules.
 
-Every command accepts a file path or `-` for standard input. Run `pnpm exec tomlsmith --help` to list all commands and options. `@tomlsmith/cli` requires Node.js 22.12 or newer and installs a platform-specific native executable without running an install-time download script.
+Every command accepts a file path or `-` for standard input. Run `tomlsmith --help` to list all commands and options. An optional npm wrapper is maintained in the repository for Node.js consumers, but it is not required by the CLI or any TomlSmith repository.
 
-Until the first npm release, run the private Rust adapter from a source checkout with `cargo run -p tomlsmith-cli -- <arguments>`.
-
-The preview support matrix, Rust MSRV, and platform-change policy are documented in [Support policy](docs/support-policy.md).
+The support matrix, Rust MSRV, and platform-change policy are documented in [Support policy](docs/support-policy.md).
 
 ## Use from Rust
 
@@ -67,7 +63,7 @@ assert!(document.diagnostics().is_empty());
 
 `tomlsmith-lsp` implements the Language Server Protocol over stdio. The [TomlSmith for VS Code](https://github.com/tomlsmith/vscode-plugin) extension launches it for VS Code; other editors can configure it as a generic LSP server.
 
-Schema-backed completion and code actions are not available yet.
+The implemented language-server surface does not include Schema-backed completion or code actions.
 
 ## Related projects
 

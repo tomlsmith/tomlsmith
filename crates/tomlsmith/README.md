@@ -10,4 +10,4 @@ assert!(document.diagnostics().is_empty());
 assert_eq!(document.text(), "title = \"TomlSmith\"\n");
 ```
 
-The API is pre-alpha and may change before 1.0. See the [TomlSmith repository](https://github.com/tomlsmith/tomlsmith) for the CLI, language server, conformance scope, and project roadmap.
+See the [TomlSmith repository](https://github.com/tomlsmith/tomlsmith) for the CLI, language server, conformance scope, and support policy.
