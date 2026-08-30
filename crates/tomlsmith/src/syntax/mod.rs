@@ -10,6 +10,7 @@ use rowan::GreenNode;
 use crate::Diagnostic;
 
 pub use kind::SyntaxKind;
+pub(crate) use kind::TomlLanguage;
 pub(crate) use lexer::Token;
 pub use view::{SyntaxElement, SyntaxNode, SyntaxToken};
 

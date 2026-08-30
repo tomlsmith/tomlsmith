@@ -168,3 +168,47 @@ fn implicit_tables_are_scoped_to_their_parent_array_element() {
         "[[a]]\n[[a.b.c]]\nx = 1\n[a.b]\ny = 2\n[[a]]\n[[a.b.c]]\nx = 3\n[[a.b]]\ny = 4\n";
     assert_conflicting_in_both_versions(invalid);
 }
+
+#[test]
+fn a_lone_carriage_return_is_rejected_in_every_position() {
+    // The pinned toml-test suite only covers a lone CR at the start of a
+    // line; these forms exercise the value-trailing positions it misses.
+    for invalid in [
+        "a = 1\r",
+        "a = 1\r\r\n",
+        "a = 1 \r\r\n",
+        "s = \"x\"\r",
+        "a = 1\r# comment\n",
+        "# comment\rb = 2\n",
+        "m = \"\"\"line\rline\"\"\"\n",
+    ] {
+        for version in [TomlVersion::V1_0, TomlVersion::V1_1] {
+            let document = Document::parse_as(invalid, version);
+            assert!(
+                document.diagnostics().iter().any(
+                    |diagnostic| diagnostic.code() == DiagnosticCode::INVALID_CONTROL_CHARACTER
+                ),
+                "{version:?} accepted a lone carriage return: {invalid:?}; diagnostics: {:?}",
+                document.diagnostics(),
+            );
+        }
+    }
+}
+
+#[test]
+fn carriage_returns_inside_crlf_newlines_remain_valid() {
+    for valid in [
+        "a = 1\r\n",
+        "a = 1\r\nb = 2\r\n",
+        "m = \"\"\"line\r\nline\"\"\"\r\n",
+    ] {
+        for version in [TomlVersion::V1_0, TomlVersion::V1_1] {
+            let document = Document::parse_as(valid, version);
+            assert!(
+                document.diagnostics().is_empty(),
+                "{version:?} rejected CRLF input {valid:?}: {:?}",
+                document.diagnostics(),
+            );
+        }
+    }
+}

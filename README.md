@@ -12,23 +12,30 @@
 
 TomlSmith checks, formats, and understands TOML 1.0 and TOML 1.1 through a Rust library, a command-line tool, and a language server.
 
-> **Status:** TomlSmith is pre-alpha and is not published to crates.io yet. The command-line interface, Rust API, and formatter behavior may still change.
+> **Status:** Pre-alpha. The command-line interface, Rust API, and formatter behavior may still change.
 
 ## Features
 
+In the terminal and CI:
+
 - Validate TOML 1.0 or TOML 1.1 with clear diagnostics and exact source locations.
-- Format documents safely, or use `fmt --check` in CI without changing files.
+- Format documents safely — comments and literal spellings are preserved in covered formatter cases — or use `fmt --check` without changing files.
 - Emit machine-readable diagnostic JSON for tools and automation.
-- Preserve comments and literal spellings while formatting.
-- Provide syntax highlighting data for editor integrations.
-- Power editor diagnostics, formatting, semantic highlighting, hover, document symbols, and folding through LSP.
-- Embed TOML parsing, diagnostics, formatting, highlighting, and semantic values in Rust applications.
+
+In editors:
+
+- Diagnostics, formatting, semantic highlighting, hover, document symbols, and folding through LSP.
+- Syntax highlighting driven by the same engine that parses the file, so colors always match what the parser sees.
+
+In Rust applications:
+
+- Embed TOML parsing, diagnostics, formatting, highlighting, and semantic values behind one immutable `Document` API.
 
 TomlSmith passes all 1,360 decoder cases in the pinned official `toml-test` v2.2.0 suites for TOML 1.0 and 1.1, with zero failures and zero skips. See [TOML conformance](tools/toml-test/README.md) for the reproducible command and result scope.
 
 ## Quick start
 
-Run the current CLI from a source checkout:
+Run the CLI:
 
 ```bash
 cargo run -p tomlsmith-cli -- check Cargo.toml
@@ -54,13 +61,17 @@ let document = Document::parse_as("title = \"TomlSmith\"\n", TomlVersion::V1_1);
 assert!(document.diagnostics().is_empty());
 ```
 
-The Rust API is currently available from a source checkout and is not yet a stable crates.io interface.
-
 ## Editor support
 
-`tomlsmith-lsp` provides the shared language-server features. The development-preview VS Code client is maintained in [TomlSmith for VS Code](https://github.com/tomlsmith/tomlsmith-vscode).
+`tomlsmith-lsp` speaks the Language Server Protocol over stdio, so any LSP-capable editor can connect to it. The VS Code client is maintained in [TomlSmith for VS Code](https://github.com/tomlsmith/vscode-plugin).
 
 Schema-backed completion and code actions are not available yet.
+
+## Related projects
+
+- [TomlSmith Playground](https://github.com/tomlsmith/playground) — try TOML 1.0 and 1.1 analysis and formatting in the browser.
+- [TomlSmith for VS Code](https://github.com/tomlsmith/vscode-plugin) — use TomlSmith language features in VS Code.
+- [TomlSmith Benchmark](https://github.com/tomlsmith/benchmark) — compare end-to-end TOML checker and formatter performance.
 
 ## Contributing
 

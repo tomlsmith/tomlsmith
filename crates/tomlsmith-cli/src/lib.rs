@@ -7,7 +7,9 @@ use std::{
 };
 
 use clap::{Parser, Subcommand, ValueEnum};
-use tomlsmith::{Diagnostic, DiagnosticCode, Document, FormatOutcome, Severity};
+use tomlsmith::{
+    Diagnostic, DiagnosticCode, Document, FormatOptions, FormatOutcome, LineEnding, Severity,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "tomlsmith", version, about = "A unified TOML toolchain")]
@@ -38,6 +40,24 @@ impl From<TomlVersionArg> for tomlsmith::TomlVersion {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+enum LineEndingArg {
+    #[default]
+    Preserve,
+    Lf,
+    Crlf,
+}
+
+impl From<LineEndingArg> for LineEnding {
+    fn from(line_ending: LineEndingArg) -> Self {
+        match line_ending {
+            LineEndingArg::Preserve => Self::Preserve,
+            LineEndingArg::Lf => Self::Lf,
+            LineEndingArg::Crlf => Self::CrLf,
+        }
+    }
+}
+
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Check a TOML document and report diagnostics.
@@ -52,6 +72,18 @@ enum Command {
         /// Exit with status 1 instead of writing when formatting is needed.
         #[arg(long)]
         check: bool,
+
+        /// Number of spaces per indentation level.
+        #[arg(long, value_parser = clap::value_parser!(u8).range(1..))]
+        indent_width: Option<u8>,
+
+        /// Line width that triggers wrapping inside arrays.
+        #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
+        line_width: Option<u16>,
+
+        /// Line-ending policy for the formatted output.
+        #[arg(long, value_enum, default_value_t = LineEndingArg::Preserve)]
+        line_ending: LineEndingArg,
 
         /// Input file, or `-` for standard input.
         #[arg(default_value = "-")]
@@ -156,7 +188,13 @@ fn execute(
                 ExitStatus::Success
             })
         }
-        Command::Fmt { check, input } => {
+        Command::Fmt {
+            check,
+            indent_width,
+            line_width,
+            line_ending,
+            input,
+        } => {
             let (source_name, source) = match read_source(&input, stdin)? {
                 SourceRead::Text {
                     source_name,
@@ -167,32 +205,27 @@ fn execute(
                     return Ok(ExitStatus::ContentFailure);
                 }
             };
-            let document = Document::parse_as(source, version);
-
-            match document.format() {
-                FormatOutcome::Unchanged => {
-                    if !check && input == Path::new("-") {
-                        stdout.write_all(document.text().as_bytes())?;
-                    }
-                    Ok(ExitStatus::Success)
-                }
-                FormatOutcome::Changed { text, .. } => {
-                    if check {
-                        Ok(ExitStatus::ContentFailure)
-                    } else {
-                        if input == Path::new("-") {
-                            stdout.write_all(text.as_bytes())?;
-                        } else {
-                            std::fs::write(input, text.as_bytes())?;
-                        }
-                        Ok(ExitStatus::Success)
-                    }
-                }
-                FormatOutcome::Refused { diagnostics } => {
-                    render_diagnostics(stderr, &source_name, &diagnostics)?;
-                    Ok(ExitStatus::ContentFailure)
-                }
+            let mut options = FormatOptions {
+                target_version: version,
+                line_ending: line_ending.into(),
+                ..FormatOptions::default()
+            };
+            if let Some(indent_width) = indent_width {
+                options.indent_width = indent_width;
             }
+            if let Some(line_width) = line_width {
+                options.line_width = line_width;
+            }
+            let (document, outcome) = Document::parse_and_format_with(source, version, &options);
+            render_format_outcome(
+                &document,
+                outcome,
+                check,
+                &input,
+                &source_name,
+                stdout,
+                stderr,
+            )
         }
         Command::Parse { input } => {
             let source = match read_source(&input, stdin)? {
@@ -259,9 +292,76 @@ fn diagnostic_json(diagnostic: &Diagnostic) -> serde_json::Value {
     })
 }
 
+fn render_format_outcome(
+    document: &Document,
+    outcome: FormatOutcome,
+    check: bool,
+    input: &Path,
+    source_name: &str,
+    stdout: &mut dyn io::Write,
+    stderr: &mut dyn io::Write,
+) -> io::Result<ExitStatus> {
+    match outcome {
+        FormatOutcome::Unchanged => {
+            if !check && input == Path::new("-") {
+                stdout.write_all(document.text().as_bytes())?;
+            }
+            Ok(ExitStatus::Success)
+        }
+        FormatOutcome::Changed { text, .. } => {
+            if check {
+                writeln!(stderr, "would reformat {source_name}")?;
+                Ok(ExitStatus::ContentFailure)
+            } else {
+                if input == Path::new("-") {
+                    stdout.write_all(text.as_bytes())?;
+                } else {
+                    write_file_atomically(input, text.as_bytes())?;
+                }
+                Ok(ExitStatus::Success)
+            }
+        }
+        FormatOutcome::Refused { diagnostics } => {
+            render_diagnostics(stderr, source_name, &diagnostics)?;
+            Ok(ExitStatus::ContentFailure)
+        }
+    }
+}
+
+/// Replaces `input` through a same-directory temporary file and rename so
+/// an interrupted write can never leave a truncated document behind.
+fn write_file_atomically(input: &Path, contents: &[u8]) -> io::Result<()> {
+    let directory = input
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty());
+    let file_name = input
+        .file_name()
+        .ok_or_else(|| io::Error::other("cannot format a path without a file name"))?;
+    let mut temporary_name = file_name.to_owned();
+    temporary_name.push(format!(".tomlsmith-{}.tmp", std::process::id()));
+    let temporary_path = directory.map_or_else(
+        || PathBuf::from(&temporary_name),
+        |parent| parent.join(&temporary_name),
+    );
+
+    let result = (|| {
+        std::fs::write(&temporary_path, contents)?;
+        if let Ok(metadata) = std::fs::metadata(input) {
+            std::fs::set_permissions(&temporary_path, metadata.permissions())?;
+        }
+        std::fs::rename(&temporary_path, input)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary_path);
+    }
+    result
+}
+
 fn read_source(input: &Path, stdin: &mut dyn io::Read) -> io::Result<SourceRead> {
     let (source_name, bytes) = if input == Path::new("-") {
-        let mut bytes = Vec::new();
+        // Pre-size the buffer so `read_to_end` on a pipe does not spend the
+        // cold-start budget growing a fresh Vec while the writer refills it.
+        let mut bytes = Vec::with_capacity(256 * 1024);
         stdin.read_to_end(&mut bytes)?;
         ("stdin".to_owned(), bytes)
     } else {

@@ -74,8 +74,33 @@ Adapters own environment-specific translation only:
 | Adapter | Owns | Must not own |
 | --- | --- | --- |
 | CLI | arguments, streams, exit codes, filesystem orchestration | TOML parsing rules |
-| LSP | JSON-RPC, UTF-8/UTF-16 conversion, cancellation, revision checks | separate semantic interpretation |
+| LSP | JSON-RPC, UTF-8/UTF-16 conversion, position clamping, per-request panic isolation, revision checks | separate semantic interpretation |
 | `toml-test` | process protocol and tagged-JSON serialization | an independent TOML decoder |
 | Schema host | resource lookup, network/cache policy | hidden mutation of a document snapshot |
 
 This separation keeps observable behavior consistent across every product surface and makes protocol layers testable using ordinary core results.
+
+Request cancellation (`$/cancelRequest`) is not implemented yet; the current
+server processes messages synchronously in arrival order. Cancellation moves
+into the LSP adapter's responsibilities together with the planned
+request-dispatch rework.
+
+Internal path/key maps use a deterministic Fx-style hasher rather than
+SipHash: they are never iterated, so ordering cannot become observable, and
+the speedup on parse-heavy paths is substantial. The tradeoff — reduced
+hash-flooding resistance on attacker-chosen keys, the same one rustc and
+rust-analyzer accept — is intentional and should be revisited alongside the
+fuzzing and resource-budget release gate.
+
+## Known internal debt
+
+The raw-text value splitter that once re-scanned every payload inside
+semantic lowering has been retired: values now lower exclusively from the
+green tree, so string-lexing knowledge lives in the lexer (plus the
+byte-scanning validator) and literal parsing decodes complete tokens.
+Degenerate payloads — parser-recovery leftovers, unterminated strings,
+depth-limited collections — follow lexer token boundaries and surface as
+`SemanticValue::Invalid` carrying the trimmed source slice of their own
+span, with `INVALID_VALUE` pointing at the first offending element. The
+`value_lowering_tests` invariants and the public
+`value_lowering_edges` suite pin these semantics.

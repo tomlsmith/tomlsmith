@@ -156,16 +156,19 @@ fn looks_like_datetime(raw: &str) -> bool {
 }
 
 fn looks_like_number(raw: &str) -> bool {
-    let normalized = raw.replace('_', "");
+    let normalized: std::borrow::Cow<'_, str> = if raw.contains('_') {
+        raw.replace('_', "").into()
+    } else {
+        raw.into()
+    };
+    let normalized: &str = &normalized;
     if matches!(
-        normalized.as_str(),
+        normalized,
         "inf" | "+inf" | "-inf" | "nan" | "+nan" | "-nan"
     ) {
         return true;
     }
-    let unsigned = normalized
-        .strip_prefix(['+', '-'])
-        .unwrap_or(normalized.as_str());
+    let unsigned = normalized.strip_prefix(['+', '-']).unwrap_or(normalized);
     if let Some(digits) = unsigned.strip_prefix("0x") {
         return !digits.is_empty()
             && digits

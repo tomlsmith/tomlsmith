@@ -75,7 +75,28 @@ pub(crate) fn format(document: &Document, options: &FormatOptions) -> FormatOutc
         };
     }
 
-    let source = document.text();
+    finish_format(document.text(), build_text(document.text(), options))
+}
+
+/// Turns already-built formatted text into the outcome `format` would have
+/// produced, applying the same refusal rules.
+pub(crate) fn finish_prebuilt(
+    document: &Document,
+    options: &FormatOptions,
+    output: String,
+) -> FormatOutcome {
+    let unsafe_diagnostics = unsafe_diagnostics(document, options.target_version);
+    if !unsafe_diagnostics.is_empty() {
+        return FormatOutcome::Refused {
+            diagnostics: unsafe_diagnostics.into(),
+        };
+    }
+    finish_format(document.text(), output)
+}
+
+/// The purely lexical formatting pass: produces the formatted text for
+/// `source` without consulting any parse result.
+pub(crate) fn build_text(source: &str, options: &FormatOptions) -> String {
     let lexed = lexer::lex(source);
     let newline = selected_newline(source, options.line_ending);
     let mut output = String::with_capacity(source.len());
@@ -91,15 +112,13 @@ pub(crate) fn format(document: &Document, options: &FormatOptions) -> FormatOutc
         match token.kind {
             SyntaxKind::Bom => output.push_str(raw),
             SyntaxKind::Whitespace => {
+                // Whitespace before a comment is always layout (see
+                // whitespace_is_layout); the Comment arm below writes the
+                // single separating space instead.
                 if line_start || whitespace_is_layout(previous, next) {
                     continue;
                 }
-                if next == Some(SyntaxKind::Comment) {
-                    trim_horizontal(&mut output);
-                    output.push(' ');
-                } else {
-                    output.push_str(raw);
-                }
+                output.push_str(raw);
             }
             SyntaxKind::Newline => {
                 if previous != Some(SyntaxKind::Comment) {
@@ -159,7 +178,7 @@ pub(crate) fn format(document: &Document, options: &FormatOptions) -> FormatOutc
         trim_horizontal(&mut output);
     }
 
-    finish_format(source, output)
+    output
 }
 
 fn unsafe_diagnostics(document: &Document, target_version: TomlVersion) -> Vec<Diagnostic> {

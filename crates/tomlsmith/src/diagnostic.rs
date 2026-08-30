@@ -93,6 +93,7 @@ pub struct Diagnostic {
     severity: Severity,
     message: String,
     range: TextRange,
+    related_range: Option<TextRange>,
 }
 
 impl Diagnostic {
@@ -106,7 +107,13 @@ impl Diagnostic {
             severity: Severity::Error,
             message: message.into(),
             range,
+            related_range: None,
         }
+    }
+
+    pub(crate) const fn with_related_range(mut self, range: TextRange) -> Self {
+        self.related_range = Some(range);
+        self
     }
 
     #[must_use]
@@ -127,5 +134,14 @@ impl Diagnostic {
     #[must_use]
     pub const fn range(&self) -> TextRange {
         self.range
+    }
+
+    /// The earlier declaration this diagnostic conflicts with, when the
+    /// conflict scan resolved one; consumers can link a duplicate or
+    /// conflicting key back to its first declaration without re-deriving
+    /// the pairing.
+    #[must_use]
+    pub const fn related_range(&self) -> Option<TextRange> {
+        self.related_range
     }
 }

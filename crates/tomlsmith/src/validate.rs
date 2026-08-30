@@ -1,14 +1,15 @@
+use rowan::{Language, NodeOrToken};
+
 use crate::{
-    Diagnostic, DiagnosticCode, SyntaxElement, SyntaxKind, SyntaxNode, TextRange, TomlVersion,
-    literal,
+    Diagnostic, DiagnosticCode, SyntaxKind, TextRange, TomlVersion, literal,
     semantic::MAX_KEY_DEPTH,
-    syntax::{self, lexer},
+    syntax::{TomlLanguage, lexer},
 };
 
 pub(crate) fn validate(
     source: &str,
     version: TomlVersion,
-    green: rowan::GreenNode,
+    green: &rowan::GreenNode,
     tokens: &[lexer::Token],
 ) -> Vec<Diagnostic> {
     struct InlineTableState {
@@ -70,24 +71,42 @@ pub(crate) fn validate(
         }
     }
 
-    let root = syntax::root(green);
-    validate_keys(&root, &mut diagnostics);
+    validate_keys(green, 0, &mut diagnostics);
     if version == TomlVersion::V1_0 {
-        validate_versioned_literals(source, &root, &mut diagnostics);
+        validate_versioned_literals(source, green, 0, &mut diagnostics);
     }
     diagnostics
 }
 
-fn validate_versioned_literals(source: &str, node: &SyntaxNode, diagnostics: &mut Vec<Diagnostic>) {
-    if node.kind() == SyntaxKind::Value {
-        let range = node.range();
-        let raw = &source[range.start() as usize..range.end() as usize];
+fn node_kind(node: &rowan::GreenNodeData) -> SyntaxKind {
+    TomlLanguage::kind_from_raw(node.kind())
+}
+
+/// Returns whether a raw value could parse as a TOML date-time. Only
+/// date-times can require TOML 1.1 here, so anything else skips the
+/// full literal parse.
+fn may_be_datetime(raw: &str) -> bool {
+    let bytes = raw.as_bytes();
+    bytes.len() >= 5
+        && bytes[0].is_ascii_digit()
+        && (bytes[2] == b':' || (bytes.len() >= 10 && bytes[4] == b'-' && bytes[7] == b'-'))
+}
+
+fn validate_versioned_literals(
+    source: &str,
+    node: &rowan::GreenNodeData,
+    offset: usize,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if node_kind(node) == SyntaxKind::Value {
+        let raw = &source[offset..offset + usize::from(node.text_len())];
         let trimmed = raw.trim();
         if !trimmed.starts_with('"')
+            && may_be_datetime(trimmed)
             && literal::parse(trimmed).is_some_and(|value| value.requires_toml_1_1)
         {
             let leading = raw.len() - raw.trim_start().len();
-            let start = range.start() as usize + leading;
+            let start = offset + leading;
             diagnostics.push(version_diagnostic(
                 start,
                 start + trimmed.len(),
@@ -95,26 +114,30 @@ fn validate_versioned_literals(source: &str, node: &SyntaxNode, diagnostics: &mu
             ));
         }
     }
+    let mut child_offset = offset;
     for child in node.children() {
-        validate_versioned_literals(source, &child, diagnostics);
+        if let NodeOrToken::Node(child_node) = child {
+            validate_versioned_literals(source, child_node, child_offset, diagnostics);
+        }
+        child_offset += usize::from(child.text_len());
     }
 }
 
-fn validate_keys(node: &SyntaxNode, diagnostics: &mut Vec<Diagnostic>) {
-    if node.kind() == SyntaxKind::Key {
+fn validate_keys(node: &rowan::GreenNodeData, offset: usize, diagnostics: &mut Vec<Diagnostic>) {
+    if node_kind(node) == SyntaxKind::Key {
         let mut expects_segment = true;
         let mut invalid = false;
         let mut segment_count = 0_usize;
-        for element in node.children_with_tokens() {
-            let SyntaxElement::Token(token) = element else {
+        for element in node.children() {
+            let NodeOrToken::Token(token) = element else {
                 continue;
             };
-            match token.kind() {
+            match TomlLanguage::kind_from_raw(token.kind()) {
                 SyntaxKind::Whitespace => {}
-                SyntaxKind::Bare | SyntaxKind::BasicString | SyntaxKind::LiteralString => {
+                kind @ (SyntaxKind::Bare | SyntaxKind::BasicString | SyntaxKind::LiteralString) => {
                     segment_count += 1;
                     invalid |= !expects_segment;
-                    if token.kind() == SyntaxKind::Bare {
+                    if kind == SyntaxKind::Bare {
                         invalid |= !token.text().chars().all(|character| {
                             character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
                         });
@@ -131,24 +154,29 @@ fn validate_keys(node: &SyntaxNode, diagnostics: &mut Vec<Diagnostic>) {
                 _ => invalid = true,
             }
         }
-        invalid |= expects_segment && !node.range().is_empty();
+        let node_len = usize::from(node.text_len());
+        invalid |= expects_segment && node_len > 0;
         if invalid {
             diagnostics.push(Diagnostic::error(
                 DiagnosticCode::INVALID_BARE_KEY,
                 "invalid key syntax",
-                node.range(),
+                TextRange::from_usize(offset, offset + node_len),
             ));
         }
         if segment_count > MAX_KEY_DEPTH {
             diagnostics.push(Diagnostic::error(
                 DiagnosticCode::NESTING_LIMIT,
                 format!("key nesting exceeds the supported limit of {MAX_KEY_DEPTH}"),
-                node.range(),
+                TextRange::from_usize(offset, offset + node_len),
             ));
         }
     }
+    let mut child_offset = offset;
     for child in node.children() {
-        validate_keys(&child, diagnostics);
+        if let NodeOrToken::Node(child_node) = child {
+            validate_keys(child_node, child_offset, diagnostics);
+        }
+        child_offset += usize::from(child.text_len());
     }
 }
 
@@ -170,7 +198,12 @@ fn validate_basic_string(
 
     while cursor < content_end {
         if bytes[cursor] != b'\\' {
-            cursor += raw[cursor..].chars().next().map_or(1, char::len_utf8);
+            // Skip to the next escape; the backslash is ASCII, so a byte
+            // scan stays on char boundaries.
+            cursor += 1;
+            while cursor < content_end && bytes[cursor] != b'\\' {
+                cursor += 1;
+            }
             continue;
         }
         let escape_start = cursor;
@@ -308,17 +341,25 @@ fn next_significant_kind(tokens: &[lexer::Token], index: usize) -> Option<Syntax
 }
 
 fn validate_raw_control_characters(source: &str) -> Vec<Diagnostic> {
-    source
-        .char_indices()
-        .filter_map(|(offset, character)| {
-            let invalid = matches!(character, '\u{0}'..='\u{8}' | '\u{b}' | '\u{c}' | '\u{e}'..='\u{1f}' | '\u{7f}');
-            invalid.then(|| {
-                Diagnostic::error(
-                    DiagnosticCode::INVALID_CONTROL_CHARACTER,
-                    "raw control character is not allowed in TOML",
-                    TextRange::from_usize(offset, offset + character.len_utf8()),
-                )
-            })
-        })
-        .collect()
+    // Every offending scalar is a one-byte ASCII control character, so a
+    // byte-level scan reports the same offsets as a `char_indices` walk.
+    let bytes = source.as_bytes();
+    let mut diagnostics = Vec::new();
+    for (offset, &byte) in bytes.iter().enumerate() {
+        let invalid = match byte {
+            0x00..=0x08 | 0x0b | 0x0c | 0x0e..=0x1f | 0x7f => true,
+            // A carriage return is only legal as the first byte of a CRLF
+            // newline; a lone CR is invalid in every TOML version.
+            b'\r' => bytes.get(offset + 1) != Some(&b'\n'),
+            _ => false,
+        };
+        if invalid {
+            diagnostics.push(Diagnostic::error(
+                DiagnosticCode::INVALID_CONTROL_CHARACTER,
+                "raw control character is not allowed in TOML",
+                TextRange::from_usize(offset, offset + 1),
+            ));
+        }
+    }
+    diagnostics
 }

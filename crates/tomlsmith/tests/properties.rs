@@ -1,8 +1,29 @@
 use proptest::prelude::*;
-use tomlsmith::{Document, SemanticValue, TextChange, TextRange};
+use tomlsmith::{Document, FormatOutcome, SemanticValue, TextChange, TextRange};
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
+
+    #[test]
+    fn formatting_is_refused_or_idempotent(source in any::<String>()) {
+        let document = Document::parse(source);
+        match document.format() {
+            FormatOutcome::Refused { diagnostics } => {
+                prop_assert!(!diagnostics.is_empty());
+            }
+            FormatOutcome::Unchanged => {
+                // Already normal form: nothing further to check.
+            }
+            FormatOutcome::Changed { text, .. } => {
+                let reformatted = Document::parse(text.as_ref());
+                prop_assert!(
+                    matches!(reformatted.format(), FormatOutcome::Unchanged),
+                    "formatting must be idempotent for {:?}",
+                    document.text(),
+                );
+            }
+        }
+    }
 
     #[test]
     fn arbitrary_utf_8_is_lossless_and_terminates(source in any::<String>()) {

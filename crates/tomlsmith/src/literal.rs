@@ -55,6 +55,14 @@ pub(crate) fn parse(raw: &str) -> Option<ParsedLiteral> {
 fn parse_basic_string(raw: &str) -> Option<(String, bool)> {
     let multiline = raw.starts_with("\"\"\"");
     let content = string_content(raw, '"', multiline)?;
+    // Fast path: no escapes, quotes, or control characters means the content
+    // is the decoded string verbatim.
+    if !content
+        .bytes()
+        .any(|byte| matches!(byte, b'\\' | b'"' | 0x7f) || (byte < 0x20 && byte != b'\t'))
+    {
+        return Some((content.to_owned(), false));
+    }
     let mut output = String::with_capacity(content.len());
     let bytes = content.as_bytes();
     let mut cursor = 0;
@@ -119,6 +127,14 @@ fn parse_basic_string(raw: &str) -> Option<(String, bool)> {
 fn parse_literal_string(raw: &str) -> Option<String> {
     let multiline = raw.starts_with("'''");
     let content = string_content(raw, '\'', multiline)?;
+    // Fast path: no quotes or control characters means the content is the
+    // decoded string verbatim.
+    if !content
+        .bytes()
+        .any(|byte| matches!(byte, b'\'' | 0x7f) || (byte < 0x20 && byte != b'\t'))
+    {
+        return Some(content.to_owned());
+    }
     let bytes = content.as_bytes();
     let mut output = String::with_capacity(content.len());
     let mut cursor = 0;
@@ -150,10 +166,13 @@ fn parse_literal_string(raw: &str) -> Option<String> {
 
 fn string_content(raw: &str, quote: char, multiline: bool) -> Option<&str> {
     let delimiter_length = if multiline { 3 } else { 1 };
-    let delimiter = quote.to_string().repeat(delimiter_length);
+    let quote = quote as u8;
+    let bytes = raw.as_bytes();
     if raw.len() < delimiter_length * 2
-        || !raw.starts_with(&delimiter)
-        || !raw.ends_with(&delimiter)
+        || !bytes[..delimiter_length].iter().all(|&byte| byte == quote)
+        || !bytes[raw.len() - delimiter_length..]
+            .iter()
+            .all(|&byte| byte == quote)
     {
         return None;
     }
@@ -238,14 +257,22 @@ fn parse_integer(raw: &str) -> Option<i64> {
         return None;
     }
 
-    raw.replace('_', "").parse::<i64>().ok()
+    if raw.contains('_') {
+        raw.replace('_', "").parse::<i64>().ok()
+    } else {
+        raw.parse::<i64>().ok()
+    }
 }
 
 fn parse_radix_integer(digits: &str, radix: u32, is_digit: impl Fn(u8) -> bool) -> Option<i64> {
     if !valid_digit_run(digits.as_bytes(), is_digit) {
         return None;
     }
-    i64::from_str_radix(&digits.replace('_', ""), radix).ok()
+    if digits.contains('_') {
+        i64::from_str_radix(&digits.replace('_', ""), radix).ok()
+    } else {
+        i64::from_str_radix(digits, radix).ok()
+    }
 }
 
 fn parse_float(raw: &str) -> Option<f64> {
@@ -287,7 +314,11 @@ fn parse_float(raw: &str) -> Option<f64> {
     if cursor != bytes.len() || (!has_fraction && !has_exponent) {
         return None;
     }
-    raw.replace('_', "").parse::<f64>().ok()
+    if raw.contains('_') {
+        raw.replace('_', "").parse::<f64>().ok()
+    } else {
+        raw.parse::<f64>().ok()
+    }
 }
 
 fn valid_digit_run(bytes: &[u8], is_digit: impl Fn(u8) -> bool) -> bool {

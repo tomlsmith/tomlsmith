@@ -27,6 +27,16 @@ thiserror = "2.0.20"
 tomlsmith = { path = "crates/tomlsmith" }
 ungrammar = "1.16.1"
 
+# Release binaries are latency-sensitive cold-start CLI/LSP entry points:
+# fat LTO + a single codegen unit measurably cut parse-path time, and
+# stripping symbols shrinks the binary the loader has to map.
+# panic stays "unwind": tomlsmith-lsp relies on catch_unwind for
+# request-level panic isolation.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_debug_implementations = "warn"

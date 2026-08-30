@@ -72,9 +72,13 @@ pub(crate) fn lex(source: &str) -> Lexed {
             b'{' => single(&mut cursor, SyntaxKind::LeftBrace),
             b'}' => single(&mut cursor, SyntaxKind::RightBrace),
             _ => {
-                cursor += source[cursor..].chars().next().map_or(1, char::len_utf8);
+                // Byte-wise advance: every delimiter is ASCII, and UTF-8
+                // continuation bytes are >= 0x80, so scanning bytes lands on
+                // exactly the same (char-boundary) end position as a
+                // char-wise scan.
+                cursor += 1;
                 while cursor < bytes.len() && !is_delimiter(bytes[cursor]) {
-                    cursor += source[cursor..].chars().next().map_or(1, char::len_utf8);
+                    cursor += 1;
                 }
                 SyntaxKind::Bare
             }
@@ -139,7 +143,7 @@ fn lex_string(
         if quote == b'"' {
             if escaped {
                 escaped = false;
-                *cursor += source[*cursor..].chars().next().map_or(1, char::len_utf8);
+                *cursor += 1;
                 continue;
             }
             if byte == b'\\' {
@@ -172,7 +176,11 @@ fn lex_string(
             terminated = true;
             break;
         }
-        *cursor += source[*cursor..].chars().next().map_or(1, char::len_utf8);
+        // Byte-wise advance: the loop only compares against ASCII bytes
+        // (quote, backslash, CR/LF), which never occur inside a multi-byte
+        // UTF-8 sequence, so this visits the same stopping points as a
+        // char-wise scan.
+        *cursor += 1;
     }
 
     if !terminated {

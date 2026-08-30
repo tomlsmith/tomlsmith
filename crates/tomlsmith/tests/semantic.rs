@@ -71,6 +71,50 @@ fn duplicate_keys_remain_ambiguous_instead_of_last_write_wins() {
 }
 
 #[test]
+fn conflict_diagnostics_carry_the_earliest_conflicting_declaration_range() {
+    let document = Document::parse("port = 8000\nport = 9000\nport = 10000\n");
+    let duplicates = document
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.code() == DiagnosticCode::DUPLICATE_KEY)
+        .collect::<Vec<_>>();
+    assert_eq!(duplicates.len(), 2, "{:?}", document.diagnostics());
+    for duplicate in duplicates {
+        let related = duplicate
+            .related_range()
+            .expect("a duplicate key must link its first declaration");
+        assert_eq!(
+            related.start(),
+            0,
+            "both redeclarations must link the earliest declaration"
+        );
+    }
+}
+
+#[test]
+fn related_ranges_stay_inside_the_conflicting_array_table_element() {
+    // `name = "apple"` in the first element is not in conflict; the
+    // duplicate must link `name = "banana"` from its own element, not the
+    // identically named key of the earlier instance.
+    let source = "[[fruit]]\nname = \"apple\"\n\n[[fruit]]\nname = \"banana\"\nname = \"cherry\"\n";
+    let document = Document::parse(source);
+    let duplicate = document
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code() == DiagnosticCode::DUPLICATE_KEY)
+        .expect("the second element holds a duplicate key");
+    let banana = source.find("name = \"banana\"").unwrap();
+    assert_eq!(
+        duplicate
+            .related_range()
+            .map(|range| range.start() as usize),
+        Some(banana),
+        "{:?}",
+        document.diagnostics()
+    );
+}
+
+#[test]
 fn array_of_table_instances_do_not_conflict_with_each_other() {
     let document =
         Document::parse("[[products]]\nname = \"Hammer\"\n\n[[products]]\nname = \"Nail\"\n");

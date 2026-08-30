@@ -92,22 +92,79 @@ impl Document {
     }
 
     fn parse_at(text: Arc<str>, version: TomlVersion, revision: Revision) -> Self {
-        let parsed = syntax::parse(&text);
-        let highlights = crate::highlight::collect(&text, &parsed.tokens);
-        let validation_diagnostics =
-            crate::validate::validate(&text, version, parsed.green.clone(), &parsed.tokens);
+        Self::parse_pipeline(text, version, revision, None).0
+    }
+
+    /// Parses `text` under `version` and immediately formats the snapshot
+    /// with `options`, producing exactly what `parse_as` followed by
+    /// `format_with` would. One-shot pipelines get the formatted text's
+    /// purely lexical construction overlapped with semantic analysis.
+    #[must_use]
+    pub fn parse_and_format_with(
+        text: impl Into<Arc<str>>,
+        version: TomlVersion,
+        options: &crate::FormatOptions,
+    ) -> (Self, crate::FormatOutcome) {
+        let text = text.into();
+        if options.target_version != version {
+            // A version mismatch makes the formatter's safety check re-parse
+            // under the target version, so there is no overlap to win here.
+            let document = Self::parse_at(text, version, Revision::INITIAL);
+            let outcome = document.format_with(options);
+            return (document, outcome);
+        }
+        let (document, formatted) =
+            Self::parse_pipeline(text, version, Revision::INITIAL, Some(options));
+        let outcome = match formatted {
+            Some(output) => crate::formatter::finish_prebuilt(&document, options, output),
+            None => document.format_with(options),
+        };
+        (document, outcome)
+    }
+
+    /// Shared parse pipeline. When `format_options` is given, the formatted
+    /// text is additionally produced on the side-analysis thread, so a
+    /// one-shot parse-then-format pipeline pays no extra wall time for it.
+    fn parse_pipeline(
+        text: Arc<str>,
+        version: TomlVersion,
+        revision: Revision,
+        format_options: Option<&crate::FormatOptions>,
+    ) -> (Self, Option<String>) {
         let syntax::Parse {
             green,
             mut diagnostics,
             tokens,
-        } = parsed;
+        } = syntax::parse(&text);
+        // Highlight collection, validation, and the optional lexical
+        // formatting pass only need the source text, token stream, and green
+        // tree, so they run beside semantic lowering. Every side task is a
+        // pure function of the parse result, and the diagnostics are merged
+        // in the same order as sequential execution, so the outcome is
+        // deterministic.
+        let (lowered, (highlights, validation_diagnostics, formatted)) =
+            std::thread::scope(|scope| {
+                let side = scope.spawn(|| {
+                    let highlights = crate::highlight::collect(&text, &tokens);
+                    let validation_diagnostics =
+                        crate::validate::validate(&text, version, &green, &tokens);
+                    let formatted =
+                        format_options.map(|options| crate::formatter::build_text(&text, options));
+                    (highlights, validation_diagnostics, formatted)
+                });
+                let lowered = semantic::lower(&text, &green);
+                let side = match side.join() {
+                    Ok(side) => side,
+                    Err(panic) => std::panic::resume_unwind(panic),
+                };
+                (lowered, side)
+            });
         drop(tokens);
-        let lowered = semantic::lower(&text, green.clone());
         diagnostics.extend(validation_diagnostics);
         diagnostics.extend(lowered.diagnostics);
         diagnostics.sort_by_key(Diagnostic::range);
 
-        Self {
+        let document = Self {
             inner: Arc::new(DocumentData {
                 text,
                 version,
@@ -117,7 +174,8 @@ impl Document {
                 semantic: lowered.document,
                 highlights: highlights.into(),
             }),
-        }
+        };
+        (document, formatted)
     }
 
     #[must_use]

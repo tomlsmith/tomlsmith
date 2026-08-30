@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -20,15 +20,18 @@ jobs:
   rust:
     name: Rust quality
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install pinned Rust toolchain
-        run: rustup show active-toolchain
+        run: rustup show active-toolchain || rustup toolchain install
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust
 
       - name: Check formatting
         run: cargo fmt --all --check
@@ -42,40 +45,96 @@ jobs:
       - name: Run Rust tests
         run: cargo test --workspace --all-features
 
-      - name: Install the declared minimum Rust version
-        run: rustup toolchain install 1.85.1 --profile minimal
-
-      - name: Check the workspace on the minimum Rust version
-        run: cargo +1.85.1 check --workspace --all-targets --all-features
-
+      # The rowan gate greps the lib's rustdoc output; run it before the
+      # workspace-wide doc build, whose colliding tomlsmith bin target would
+      # otherwise overwrite the lib pages the gate inspects.
       - name: Check that Rowan is absent from the public API
         run: bash .github/scripts/check-rowan-api.sh
+
+      - name: Check documentation
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  msrv:
+    name: Minimum supported Rust version
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Pin every rustc/cargo invocation (including the cache action's probe)
+      # to the MSRV so the 1.98.0 toolchain is never auto-installed here.
+      RUSTUP_TOOLCHAIN: "1.85.0"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install the declared minimum Rust version
+        run: rustup toolchain install 1.85.0 --profile minimal
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: msrv
+
+      - name: Check the workspace on the minimum Rust version
+        run: cargo +1.85.0 check --workspace --all-targets --all-features
+
+  cross-platform:
+    name: Tests on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+        shell: bash
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: cross-platform
+
+      - name: Run Rust tests
+        run: cargo test --workspace --all-features
 
   toml-test:
     name: TOML conformance
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install pinned Rust toolchain
-        run: rustup show active-toolchain
+        run: rustup show active-toolchain || rustup toolchain install
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: 1.19.13
           cache: false
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: toml-test
 
       - name: Run TOML 1.0 and 1.1 conformance
-        run: bash tools/toml-test/run.sh
+        # Drop any cache-restored reports first so the uploaded artifact can
+        # only contain reports produced by this run.
+        run: |
+          rm -rf target/toml-test/v2.2.0/reports
+          bash tools/toml-test/run.sh
 
       - name: Upload conformance reports
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: toml-test-reports
           path: target/toml-test/v2.2.0/reports/*.json
