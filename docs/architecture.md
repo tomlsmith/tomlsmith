@@ -74,11 +74,14 @@ Adapters own environment-specific translation only:
 | Adapter | Owns | Must not own |
 | --- | --- | --- |
 | CLI | arguments, streams, exit codes, filesystem orchestration | TOML parsing rules |
+| npm launcher | native package selection and process delegation | CLI argument parsing or TOML language behavior |
 | LSP | JSON-RPC, UTF-8/UTF-16 conversion, position clamping, per-request panic isolation, revision checks | separate semantic interpretation |
 | `toml-test` | process protocol and tagged-JSON serialization | an independent TOML decoder |
 | Schema host | resource lookup, network/cache policy | hidden mutation of a document snapshot |
 
 This separation keeps observable behavior consistent across every product surface and makes protocol layers testable using ordinary core results.
+
+`@tomlsmith/cli` is the public command-line distribution. Its TypeScript launcher selects an exact-version platform package and delegates the complete process interface to the native executable produced by the private `tomlsmith-cli` Rust crate. The launcher does not parse, normalize, or reinterpret user arguments, so npm distribution cannot develop a second CLI interface.
 
 Request cancellation (`$/cancelRequest`) is not implemented yet; the current
 server processes messages synchronously in arrival order. Cancellation moves

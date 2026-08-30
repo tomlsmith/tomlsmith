@@ -1,18 +1,29 @@
 use crate::{SyntaxKind, TextRange, syntax::lexer::Token};
 
+/// A source-level semantic classification suitable for editor highlighting.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum HighlightKind {
+    /// A bare or quoted key segment in a key-value declaration.
     Key,
+    /// A key segment in a table or array-of-tables header.
     Table,
+    /// A string value.
     String,
+    /// An integer or floating-point value.
     Number,
+    /// A boolean value.
     Boolean,
+    /// An offset/local date, time, or date-time value.
     DateTime,
+    /// A comment including its leading hash.
     Comment,
+    /// TOML structural punctuation.
     Punctuation,
+    /// A value-shaped token that cannot be classified as valid TOML.
     Invalid,
 }
 
+/// A semantic highlight category attached to a UTF-8 source byte range.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Highlight {
     kind: HighlightKind,
@@ -20,11 +31,13 @@ pub struct Highlight {
 }
 
 impl Highlight {
+    /// Returns the semantic category.
     #[must_use]
     pub const fn kind(self) -> HighlightKind {
         self.kind
     }
 
+    /// Returns the classified source byte range.
     #[must_use]
     pub const fn range(self) -> TextRange {
         self.range

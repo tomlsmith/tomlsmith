@@ -4,13 +4,9 @@
 
 <p align="center"><img src="assets/tomlsmith-icon.svg" width="144" alt="TomlSmith 图标"></p>
 
-> **为什么叫 TomlSmith？** 这个名字由 `TOML` 与 `Smith`（铁匠、工匠）组合而来：正如工匠把原材料锻造成可靠器物，TomlSmith 也通过检查和打磨 TOML，让配置值得信赖。
-
 [![CI](https://github.com/tomlsmith/tomlsmith/actions/workflows/ci.yml/badge.svg)](https://github.com/tomlsmith/tomlsmith/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**从代码和 CI 到编辑器，一套 TOML 工具链。**
-
-TomlSmith 通过 Rust 库、命令行工具和语言服务器，为 TOML 1.0 与 TOML 1.1 提供检查、格式化和语言理解能力。
+**在 Rust、命令行或编辑器中解析、检查和格式化 TOML 1.0 与 1.1。**
 
 > **状态：** pre-alpha。命令行接口、Rust API 和格式化行为仍可能调整。
 
@@ -18,39 +14,45 @@ TomlSmith 通过 Rust 库、命令行工具和语言服务器，为 TOML 1.0 与
 
 在终端和 CI 中：
 
-- 按 TOML 1.0 或 TOML 1.1 检查文档，并提供清晰诊断和精确源码位置。
-- 安全地格式化文档——在已覆盖的格式化场景中保留注释和字面量拼写——也可以使用 `fmt --check` 而不修改文件。
+- 按 TOML 1.0 或 1.1 检查文档，并报告带源码位置的诊断。
+- 格式化文档；已覆盖的场景会保留注释和字面量写法，也可以使用 `fmt --check` 只检查、不改文件。
 - 为工具和自动化流程输出机器可读的诊断 JSON。
 
 在编辑器中：
 
 - 通过 LSP 提供诊断、格式化、语义高亮、悬停提示、文档符号和折叠。
-- 语法高亮由解析文件的同一引擎驱动，着色始终与解析器的理解一致。
 
 在 Rust 应用中：
 
-- 通过统一的不可变 `Document` API 使用 TOML 解析、诊断、格式化、高亮和语义值。
+- 解析一次文档，再通过不可变的 `Document` API 查询诊断、格式化结果、高亮和解码后的值。
 
-TomlSmith 已通过固定版本的官方 `toml-test` v2.2.0 中全部 1,360 个 TOML 1.0 与 1.1 解码测试，零失败、零跳过。可复现命令和结果范围请参阅 [TOML 一致性测试](tools/toml-test/README.md)。
+TomlSmith 通过 TOML 1.0 与 1.1 的全部 1,360 个 `toml-test` 解码用例。测试范围与命令见 [TOML 一致性测试](tools/toml-test/README.md)。
 
 ## 快速开始
 
-运行 CLI：
+首个公开版本将以 npm 作为 CLI 的主要安装入口：
 
 ```bash
-cargo run -p tomlsmith-cli -- check Cargo.toml
-cargo run -p tomlsmith-cli -- fmt Cargo.toml
-cargo run -p tomlsmith-cli -- fmt --check Cargo.toml
-cargo run -p tomlsmith-cli -- parse Cargo.toml
+pnpm add --save-dev @tomlsmith/cli
+pnpm exec tomlsmith check Cargo.toml
+pnpm exec tomlsmith fmt Cargo.toml
+pnpm exec tomlsmith fmt --check Cargo.toml
+pnpm exec tomlsmith parse Cargo.toml
 ```
 
 默认使用 TOML 1.1；需要时可以显式选择 TOML 1.0：
 
 ```bash
-cargo run -p tomlsmith-cli -- --toml-version 1.0 check Cargo.toml
+pnpm exec tomlsmith --toml-version 1.0 check Cargo.toml
 ```
 
-所有命令都可以读取文件路径或使用 `-` 从标准输入读取。完整命令说明可运行 `cargo run -p tomlsmith-cli -- --help` 查看。
+为兼容现有编辑器生态，各入口的默认值并不完全相同：LSP 与 VS Code 扩展默认使用 TOML 1.0。完整矩阵和接入规则见 [TOML 版本策略](docs/version-policy.md)。
+
+所有命令都可以读取文件路径或使用 `-` 从标准输入读取。运行 `pnpm exec tomlsmith --help` 可列出全部命令与参数。`@tomlsmith/cli` 要求 Node.js 22.12 或更新版本；它会安装当前平台的原生可执行文件，不运行安装期下载脚本。
+
+首次 npm 发布前，可以在源码检出中通过 `cargo run -p tomlsmith-cli -- <参数>` 运行私有 Rust adapter。
+
+预览阶段的平台矩阵、Rust MSRV 与平台变更规则见[支持策略](docs/support-policy.md)。
 
 ## 在 Rust 中使用
 
@@ -63,13 +65,13 @@ assert!(document.diagnostics().is_empty());
 
 ## 编辑器支持
 
-`tomlsmith-lsp` 通过 stdio 提供标准的 Language Server Protocol，任何支持 LSP 的编辑器都可以接入。VS Code 客户端由 [TomlSmith for VS Code](https://github.com/tomlsmith/vscode-plugin) 独立维护。
+`tomlsmith-lsp` 通过 stdio 实现 Language Server Protocol。[TomlSmith for VS Code](https://github.com/tomlsmith/vscode-plugin) 扩展会在 VS Code 中启动它；其他编辑器可以把它配置为通用 LSP 服务器。
 
 当前尚未提供基于 Schema 的补全和代码操作。
 
 ## 相关项目
 
-- [TomlSmith Playground](https://github.com/tomlsmith/playground) — 在浏览器中体验 TOML 1.0 与 1.1 的分析和格式化。
+- [TomlSmith Playground](https://github.com/tomlsmith/playground) — 在浏览器中检查和格式化 TOML 1.0 与 1.1。
 - [TomlSmith for VS Code](https://github.com/tomlsmith/vscode-plugin) — 在 VS Code 中使用 TomlSmith 语言能力。
 - [TomlSmith Benchmark](https://github.com/tomlsmith/benchmark) — 比较 TOML 检查器与格式化器的端到端性能。
 

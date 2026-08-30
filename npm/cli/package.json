@@ -1,0 +1,41 @@
+{
+  "name": "@tomlsmith/cli",
+  "version": "0.1.0",
+  "description": "The TomlSmith TOML formatter and checker",
+  "type": "module",
+  "bin": {
+    "tomlsmith": "dist/cli.js"
+  },
+  "files": [
+    "dist/cli.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tomlsmith/tomlsmith.git",
+    "directory": "npm/cli"
+  },
+  "bugs": "https://github.com/tomlsmith/tomlsmith/issues",
+  "homepage": "https://github.com/tomlsmith/tomlsmith#readme",
+  "keywords": [
+    "toml",
+    "formatter",
+    "linter",
+    "cli"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "optionalDependencies": {
+    "@tomlsmith/cli-darwin-arm64": "workspace:0.1.0",
+    "@tomlsmith/cli-darwin-x64": "workspace:0.1.0",
+    "@tomlsmith/cli-linux-arm64": "workspace:0.1.0",
+    "@tomlsmith/cli-linux-x64": "workspace:0.1.0",
+    "@tomlsmith/cli-win32-x64": "workspace:0.1.0"
+  }
+}

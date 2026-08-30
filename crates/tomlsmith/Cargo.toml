@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+documentation = "https://docs.rs/tomlsmith"
+readme = "README.md"
+keywords = ["toml", "parser", "formatter", "syntax", "configuration"]
+categories = ["parser-implementations", "config", "development-tools"]
 
 [dependencies]
 rowan.workspace = true

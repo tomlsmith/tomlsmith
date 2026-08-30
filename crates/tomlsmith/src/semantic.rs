@@ -76,6 +76,7 @@ impl std::hash::Hasher for FastHasher {
 
 type FastMap<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<FastHasher>>;
 
+/// A decoded sequence of TOML key segments.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct KeyPath(Arc<[Arc<str>]>);
 
@@ -84,31 +85,45 @@ impl KeyPath {
         Self(segments.into())
     }
 
+    /// Iterates decoded key segments in source order.
     pub fn segments(&self) -> impl ExactSizeIterator<Item = &str> {
         self.0.iter().map(AsRef::as_ref)
     }
 
+    /// Joins decoded segments with dots for display.
+    ///
+    /// This display form is not guaranteed to round-trip when a segment itself contains a dot.
     #[must_use]
     pub fn dotted(&self) -> String {
         self.segments().collect::<Vec<_>>().join(".")
     }
 }
 
+/// The source statement that introduced a declaration.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum DeclarationKind {
+    /// A key-value assignment.
     KeyValue,
+    /// A table header.
     Table,
+    /// An array-of-tables header.
     ArrayTable,
 }
 
+/// A TOML date/time value category.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum DateTimeKind {
+    /// A date and time with a UTC marker or numeric offset.
     OffsetDateTime,
+    /// A date and time without an offset.
     LocalDateTime,
+    /// A calendar date without a time.
     LocalDate,
+    /// A wall-clock time without a date or offset.
     LocalTime,
 }
 
+/// A validated TOML date/time retaining source spelling and protocol-normalized spelling.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct DateTimeValue {
     kind: DateTimeKind,
@@ -138,36 +153,50 @@ impl DateTimeValue {
         }
     }
 
+    /// Returns the date/time category.
     #[must_use]
     pub const fn kind(&self) -> DateTimeKind {
         self.kind
     }
 
+    /// Returns the exact source spelling.
     #[must_use]
     pub fn raw(&self) -> &str {
         &self.raw
     }
 
+    /// Returns the normalized spelling used by the `toml-test` decoder protocol.
     #[must_use]
     pub fn canonical(&self) -> &str {
         &self.canonical
     }
 }
 
+/// A decoded TOML value or an error-tolerant invalid placeholder.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SemanticValue {
+    /// A decoded basic or literal string.
     String(Arc<str>),
+    /// A signed TOML integer.
     Integer(i64),
+    /// A TOML floating-point value, including infinities and NaN.
     Float(f64),
+    /// A boolean value.
     Boolean(bool),
+    /// A validated date/time value.
     DateTime(DateTimeValue),
+    /// An ordered TOML array.
     Array(Arc<[Self]>),
+    /// Ordered decoded entries from an inline table.
     InlineTable(Arc<[(KeyPath, Self)]>),
+    /// A materialized table value.
     Table(SemanticTable),
+    /// Raw source for a value that could not be decoded.
     Invalid(Arc<str>),
 }
 
 impl SemanticValue {
+    /// Returns the decoded string, or `None` for another value kind.
     #[must_use]
     pub fn as_str(&self) -> Option<&str> {
         match self {
@@ -176,6 +205,7 @@ impl SemanticValue {
         }
     }
 
+    /// Returns the integer, or `None` for another value kind.
     #[must_use]
     pub const fn as_integer(&self) -> Option<i64> {
         match self {
@@ -184,6 +214,7 @@ impl SemanticValue {
         }
     }
 
+    /// Returns the float, or `None` for another value kind.
     #[must_use]
     pub const fn as_float(&self) -> Option<f64> {
         match self {
@@ -192,6 +223,7 @@ impl SemanticValue {
         }
     }
 
+    /// Returns the boolean, or `None` for another value kind.
     #[must_use]
     pub const fn as_bool(&self) -> Option<bool> {
         match self {
@@ -200,6 +232,7 @@ impl SemanticValue {
         }
     }
 
+    /// Returns array elements, or `None` for another value kind.
     #[must_use]
     pub fn as_array(&self) -> Option<&[Self]> {
         match self {
@@ -208,6 +241,7 @@ impl SemanticValue {
         }
     }
 
+    /// Returns inline-table entries, or `None` for another value kind.
     #[must_use]
     pub fn as_inline_table(&self) -> Option<&[(KeyPath, Self)]> {
         match self {
@@ -216,6 +250,7 @@ impl SemanticValue {
         }
     }
 
+    /// Returns the table, or `None` for another value kind.
     #[must_use]
     pub const fn as_table(&self) -> Option<&SemanticTable> {
         match self {
@@ -224,6 +259,7 @@ impl SemanticValue {
         }
     }
 
+    /// Returns the date/time value, or `None` for another value kind.
     #[must_use]
     pub const fn as_datetime(&self) -> Option<&DateTimeValue> {
         match self {
@@ -233,15 +269,18 @@ impl SemanticValue {
     }
 }
 
+/// An insertion-ordered map of decoded table entries.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SemanticTable(Arc<[(Arc<str>, SemanticValue)]>);
 
 impl SemanticTable {
+    /// Returns decoded entries in declaration order.
     #[must_use]
     pub fn entries(&self) -> &[(Arc<str>, SemanticValue)] {
         &self.0
     }
 
+    /// Looks up one direct decoded key.
     #[must_use]
     pub fn get(&self, key: &str) -> Option<&SemanticValue> {
         self.0
@@ -250,6 +289,7 @@ impl SemanticTable {
     }
 }
 
+/// One source declaration retained even when its key is ambiguous or conflicting.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Declaration {
     key: KeyPath,
@@ -266,27 +306,38 @@ pub struct Declaration {
 }
 
 impl Declaration {
+    /// Returns the declaration's fully qualified decoded key path.
     #[must_use]
     pub const fn key(&self) -> &KeyPath {
         &self.key
     }
 
+    /// Returns the statement kind that introduced the declaration.
     #[must_use]
     pub const fn kind(&self) -> DeclarationKind {
         self.kind
     }
 
+    /// Returns the decoded value for key-value declarations.
+    ///
+    /// Table and array-of-tables declarations return `None`; use [`SemanticDocument::root`] for
+    /// their materialized content.
     #[must_use]
     pub const fn value(&self) -> Option<&SemanticValue> {
         self.value.as_ref()
     }
 
+    /// Returns the complete declaration's UTF-8 byte range.
     #[must_use]
     pub const fn range(&self) -> TextRange {
         self.range
     }
 }
 
+/// The declaration-preserving semantic view of a parsed snapshot.
+///
+/// [`Self::declarations`] retains conflicts and duplicates. [`Self::root`] exposes the decoded
+/// table tree, while [`Self::resolve`] reports ambiguity rather than silently choosing a value.
 #[derive(Clone)]
 pub struct SemanticDocument {
     declarations: Arc<[Declaration]>,
@@ -303,17 +354,20 @@ pub struct SemanticDocument {
 }
 
 impl SemanticDocument {
+    /// Returns all lowered declarations in source order.
     #[must_use]
     pub fn declarations(&self) -> &[Declaration] {
         &self.declarations
     }
 
+    /// Lazily materializes and returns the decoded root table.
     #[must_use]
     pub fn root(&self) -> &SemanticTable {
         self.root
             .get_or_init(|| build_semantic_root(&self.declarations))
     }
 
+    /// Resolves a sequence of decoded key segments without hiding duplicate declarations.
     pub fn resolve<I, S>(&self, segments: I) -> Resolution<'_>
     where
         I: IntoIterator<Item = S>,
@@ -353,10 +407,14 @@ impl fmt::Debug for SemanticDocument {
     }
 }
 
+/// The result of resolving one fully qualified decoded key path.
 #[derive(Debug)]
 pub enum Resolution<'document> {
+    /// No declaration has this path.
     Missing,
+    /// Exactly one declaration has this path.
     Unique(&'document Declaration),
+    /// Multiple declarations have this path.
     Ambiguous(Vec<&'document Declaration>),
 }
 

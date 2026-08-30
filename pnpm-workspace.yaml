@@ -1,0 +1,10 @@
+packages:
+  - "npm/cli"
+  - "npm/platforms/*"
+
+# Quarantine newly published development dependencies for one day before fresh resolution.
+minimumReleaseAge: 1440
+
+# esbuild ships a ready-to-use platform binary; this workspace does not need its install script.
+allowBuilds:
+  esbuild: false

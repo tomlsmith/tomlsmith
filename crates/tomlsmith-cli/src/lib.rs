@@ -68,6 +68,9 @@ enum Command {
     },
 
     /// Format a TOML document.
+    ///
+    /// Symbolic links are followed and preserved. On Unix, files with multiple hard links are
+    /// refused because an atomic replacement cannot preserve their shared inode identity.
     Fmt {
         /// Exit with status 1 instead of writing when formatting is needed.
         #[arg(long)]
@@ -328,33 +331,53 @@ fn render_format_outcome(
     }
 }
 
-/// Replaces `input` through a same-directory temporary file and rename so
-/// an interrupted write can never leave a truncated document behind.
+/// Replaces the file reached through `input` using a same-directory temporary file, preserving a
+/// symbolic link at the user-facing path. `tempfile::persist` provides replacement semantics on
+/// Windows as well as rename-based atomic replacement on Unix.
 fn write_file_atomically(input: &Path, contents: &[u8]) -> io::Result<()> {
-    let directory = input
+    let destination = match std::fs::symlink_metadata(input) {
+        Ok(metadata) if metadata.file_type().is_symlink() => std::fs::canonicalize(input)?,
+        Ok(_) => input.to_owned(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => input.to_owned(),
+        Err(error) => return Err(error),
+    };
+    let directory = destination
         .parent()
-        .filter(|parent| !parent.as_os_str().is_empty());
-    let file_name = input
-        .file_name()
-        .ok_or_else(|| io::Error::other("cannot format a path without a file name"))?;
-    let mut temporary_name = file_name.to_owned();
-    temporary_name.push(format!(".tomlsmith-{}.tmp", std::process::id()));
-    let temporary_path = directory.map_or_else(
-        || PathBuf::from(&temporary_name),
-        |parent| parent.join(&temporary_name),
-    );
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let metadata = std::fs::metadata(&destination)?;
+    refuse_multiply_linked_file(&destination, &metadata)?;
 
-    let result = (|| {
-        std::fs::write(&temporary_path, contents)?;
-        if let Ok(metadata) = std::fs::metadata(input) {
-            std::fs::set_permissions(&temporary_path, metadata.permissions())?;
-        }
-        std::fs::rename(&temporary_path, input)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temporary_path);
+    let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
+    temporary
+        .as_file()
+        .set_permissions(metadata.permissions())?;
+    io::Write::write_all(&mut temporary, contents)?;
+    io::Write::flush(&mut temporary)?;
+    temporary.as_file().sync_all()?;
+    temporary
+        .persist(&destination)
+        .map(|_| ())
+        .map_err(|error| error.error)
+}
+
+#[cfg(unix)]
+fn refuse_multiply_linked_file(path: &Path, metadata: &std::fs::Metadata) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let links = metadata.nlink();
+    if links > 1 {
+        return Err(io::Error::other(format!(
+            "refusing to atomically replace {} because it has multiple hard links ({links}); format stdin and write the result explicitly instead",
+            path.display(),
+        )));
     }
-    result
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn refuse_multiply_linked_file(_path: &Path, _metadata: &std::fs::Metadata) -> io::Result<()> {
+    Ok(())
 }
 
 fn read_source(input: &Path, stdin: &mut dyn io::Read) -> io::Result<SourceRead> {

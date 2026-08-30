@@ -1,0 +1,176 @@
+name: Binary release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: binary-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Cache Rust validation artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: binary-release-validation
+
+      - name: Validate source and generated code
+        run: |
+          cargo fmt --all --check
+          cargo run --package xtask -- codegen --check
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Run release tests
+        run: cargo test --locked --workspace --all-features
+
+      - name: Check public API boundary
+        run: bash .github/scripts/check-rowan-api.sh
+
+      - name: Read workspace version
+        id: version
+        shell: bash
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq --exit-status --raw-output '.packages[] | select(.name == "tomlsmith") | .version')
+          test "v${version}" = "${GITHUB_REF_NAME}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            label: darwin-arm64
+            rust_target: aarch64-apple-darwin
+            executable_suffix: ""
+            macos_deployment_target: "11.0"
+            musl: false
+          - runner: macos-15-intel
+            label: darwin-x64
+            rust_target: x86_64-apple-darwin
+            executable_suffix: ""
+            macos_deployment_target: "10.15"
+            musl: false
+          - runner: ubuntu-24.04-arm
+            label: linux-arm64-musl
+            rust_target: aarch64-unknown-linux-musl
+            executable_suffix: ""
+            macos_deployment_target: ""
+            musl: true
+          - runner: ubuntu-24.04
+            label: linux-x64-musl
+            rust_target: x86_64-unknown-linux-musl
+            executable_suffix: ""
+            macos_deployment_target: ""
+            musl: true
+          - runner: windows-2025
+            label: win32-x64
+            rust_target: x86_64-pc-windows-msvc
+            executable_suffix: ".exe"
+            macos_deployment_target: ""
+            musl: false
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install pinned Rust toolchain and target
+        shell: bash
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add "${{ matrix.rust_target }}"
+
+      - name: Install musl linker
+        if: matrix.musl
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.rust_target }}
+
+      - name: Build CLI and language server
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_deployment_target }}
+        run: cargo build --locked --release --package tomlsmith-cli --package tomlsmith-lsp --target ${{ matrix.rust_target }}
+
+      - name: Smoke-test release binaries
+        shell: bash
+        run: |
+          cli="target/${{ matrix.rust_target }}/release/tomlsmith${{ matrix.executable_suffix }}"
+          lsp="target/${{ matrix.rust_target }}/release/tomlsmith-lsp${{ matrix.executable_suffix }}"
+          "$cli" --version
+          "$cli" --help > /dev/null
+          "$lsp" --version
+          "$lsp" --help > /dev/null
+
+      - name: Archive release binaries
+        shell: bash
+        run: |
+          archive="tomlsmith-v${{ needs.validate.outputs.version }}-${{ matrix.label }}.tar.gz"
+          stage="release-${{ matrix.label }}"
+          mkdir "$stage"
+          cp "target/${{ matrix.rust_target }}/release/tomlsmith${{ matrix.executable_suffix }}" "$stage/"
+          cp "target/${{ matrix.rust_target }}/release/tomlsmith-lsp${{ matrix.executable_suffix }}" "$stage/"
+          cp LICENSE README.md "$stage/"
+          tar -czf "$archive" -C "$stage" .
+
+      - name: Upload tested archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: binary-${{ matrix.label }}
+          path: tomlsmith-v${{ needs.validate.outputs.version }}-${{ matrix.label }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    needs: [validate, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download tested archives
+        uses: actions/download-artifact@v8
+        with:
+          pattern: binary-*
+          path: release
+          merge-multiple: true
+
+      - name: Generate archive checksums
+        working-directory: release
+        run: sha256sum ./*.tar.gz > SHA256SUMS
+
+      - name: Create immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" release/* --verify-tag --title "TomlSmith ${{ needs.validate.outputs.version }}" --generate-notes

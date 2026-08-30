@@ -111,6 +111,70 @@ fn fmt_rewrites_a_file_when_check_is_not_requested() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn fmt_preserves_a_symbolic_link_and_rewrites_its_target() {
+    use std::os::unix::fs::symlink;
+
+    let directory = TempDirectory::new();
+    let target = directory.path().join("target.toml");
+    let link = directory.path().join("linked.toml");
+    fs::write(&target, "name=\"TomlSmith\"\n").expect("fixture should be written");
+    symlink(&target, &link).expect("symbolic link should be created");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_tomlsmith"))
+        .arg("fmt")
+        .arg(&link)
+        .output()
+        .expect("tomlsmith process should start");
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    assert!(
+        fs::symlink_metadata(&link)
+            .expect("symbolic link should remain")
+            .file_type()
+            .is_symlink(),
+        "fmt must not replace the symbolic link itself",
+    );
+    assert_eq!(
+        fs::read_to_string(target).expect("target should remain readable"),
+        "name = \"TomlSmith\"\n",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn fmt_refuses_a_multiply_linked_file_without_breaking_link_identity() {
+    use std::os::unix::fs::MetadataExt;
+
+    let directory = TempDirectory::new();
+    let first = directory.path().join("first.toml");
+    let second = directory.path().join("second.toml");
+    let original = "name=\"TomlSmith\"\n";
+    fs::write(&first, original).expect("fixture should be written");
+    fs::hard_link(&first, &second).expect("hard link should be created");
+    let inode = fs::metadata(&first)
+        .expect("metadata should be readable")
+        .ino();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_tomlsmith"))
+        .arg("fmt")
+        .arg(&first)
+        .output()
+        .expect("tomlsmith process should start");
+
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).expect("error should be UTF-8");
+    assert!(stderr.contains("multiple hard links"), "{stderr:?}");
+    assert_eq!(fs::read_to_string(&first).unwrap(), original);
+    assert_eq!(fs::read_to_string(&second).unwrap(), original);
+    assert_eq!(fs::metadata(&first).unwrap().ino(), inode);
+    assert_eq!(fs::metadata(&second).unwrap().ino(), inode);
+}
+
 #[test]
 fn parse_reads_a_file_and_emits_json() {
     let directory = TempDirectory::new();

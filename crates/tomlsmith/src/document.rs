@@ -4,13 +4,20 @@ use rowan::GreenNode;
 
 use crate::{Diagnostic, SemanticDocument, SyntaxNode, semantic, syntax};
 
+/// The published TOML language specification used to parse and validate a snapshot.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum TomlVersion {
+    /// TOML 1.0.0.
     V1_0,
+    /// TOML 1.1.0.
     #[default]
     V1_1,
 }
 
+/// An immutable TOML source snapshot and its derived syntax, semantics, diagnostics, and spans.
+///
+/// Clones share all snapshot data. Applying [`TextChange`] values creates another independently
+/// queryable snapshot rather than mutating the original.
 #[derive(Clone)]
 pub struct Document {
     inner: Arc<DocumentData>,
@@ -27,38 +34,49 @@ struct DocumentData {
     highlights: Arc<[crate::Highlight]>,
 }
 
+/// A monotonically increasing identifier for snapshots derived through [`Document::with_changes`].
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Revision(u64);
 
 impl Revision {
+    /// The revision assigned to a freshly parsed snapshot.
     pub const INITIAL: Self = Self(0);
 
+    /// Creates a revision from its numeric representation.
     #[must_use]
     pub const fn new(value: u64) -> Self {
         Self(value)
     }
 
+    /// Returns the numeric representation.
     #[must_use]
     pub const fn get(self) -> u64 {
         self.0
     }
 }
 
+/// A source update applied to an immutable [`Document`] snapshot.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TextChange {
+    /// Replaces the complete document text.
     Replace(Arc<str>),
+    /// Replaces a UTF-8 byte range with new text.
     Edit {
+        /// The half-open byte range in the result of the preceding change.
         range: crate::TextRange,
+        /// Text inserted in place of `range`.
         insert: Arc<str>,
     },
 }
 
 impl TextChange {
+    /// Creates a complete-document replacement.
     #[must_use]
     pub fn replace(text: impl Into<Arc<str>>) -> Self {
         Self::Replace(text.into())
     }
 
+    /// Creates a range edit whose offsets are UTF-8 bytes.
     #[must_use]
     pub fn edit(range: crate::TextRange, insert: impl Into<Arc<str>>) -> Self {
         Self::Edit {
@@ -68,12 +86,26 @@ impl TextChange {
     }
 }
 
+/// Why a source update could not produce a new snapshot.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ChangeError {
+    /// The edit range is reversed or extends beyond the current text.
     #[error("edit range {start}..{end} is outside a document of {text_len} bytes")]
-    OutOfBounds { start: u32, end: u32, text_len: u32 },
+    OutOfBounds {
+        /// Requested start offset.
+        start: u32,
+        /// Requested exclusive end offset.
+        end: u32,
+        /// Current document length in bytes.
+        text_len: u32,
+    },
+    /// An edit offset splits a multi-byte UTF-8 scalar value.
     #[error("byte offset {offset} is not a UTF-8 character boundary")]
-    InvalidUtf8Boundary { offset: u32 },
+    InvalidUtf8Boundary {
+        /// The invalid byte offset.
+        offset: u32,
+    },
+    /// Incrementing the previous snapshot revision would exceed `u64`.
     #[error("document revision overflowed")]
     RevisionOverflow,
 }
@@ -138,10 +170,19 @@ impl Document {
         } = syntax::parse(&text);
         // Highlight collection, validation, and the optional lexical
         // formatting pass only need the source text, token stream, and green
-        // tree, so they run beside semantic lowering. Every side task is a
-        // pure function of the parse result, and the diagnostics are merged
-        // in the same order as sequential execution, so the outcome is
-        // deterministic.
+        // tree. Native targets overlap them with semantic lowering. WebAssembly
+        // targets run the same pure operations sequentially because
+        // `wasm32-unknown-unknown` has no native thread-spawn capability.
+        #[cfg(target_family = "wasm")]
+        let (lowered, (highlights, validation_diagnostics, formatted)) = {
+            let lowered = semantic::lower(&text, &green);
+            let highlights = crate::highlight::collect(&text, &tokens);
+            let validation_diagnostics = crate::validate::validate(&text, version, &green, &tokens);
+            let formatted =
+                format_options.map(|options| crate::formatter::build_text(&text, options));
+            (lowered, (highlights, validation_diagnostics, formatted))
+        };
+        #[cfg(not(target_family = "wasm"))]
         let (lowered, (highlights, validation_diagnostics, formatted)) =
             std::thread::scope(|scope| {
                 let side = scope.spawn(|| {
@@ -178,36 +219,45 @@ impl Document {
         (document, formatted)
     }
 
+    /// Returns the exact source text owned by this snapshot.
     #[must_use]
     pub fn text(&self) -> &str {
         &self.inner.text
     }
 
+    /// Returns the TOML language version selected for this snapshot.
     #[must_use]
     pub fn version(&self) -> TomlVersion {
         self.inner.version
     }
 
+    /// Returns the snapshot revision.
     #[must_use]
     pub fn revision(&self) -> Revision {
         self.inner.revision
     }
 
+    /// Returns parser, version, and semantic diagnostics sorted by primary range.
     #[must_use]
     pub fn diagnostics(&self) -> &[Diagnostic] {
         &self.inner.diagnostics
     }
 
+    /// Returns declarations and lazily materialized decoded values for this snapshot.
     #[must_use]
     pub fn semantics(&self) -> &SemanticDocument {
         &self.inner.semantic
     }
 
+    /// Returns source-backed semantic highlight spans.
     #[must_use]
     pub fn highlights(&self) -> &[crate::Highlight] {
         &self.inner.highlights
     }
 
+    /// Formats with default layout options and this snapshot's TOML version.
+    ///
+    /// Invalid snapshots are refused rather than rewritten.
     #[must_use]
     pub fn format(&self) -> crate::FormatOutcome {
         let options = crate::FormatOptions {
@@ -217,6 +267,10 @@ impl Document {
         self.format_with(&options)
     }
 
+    /// Formats with explicit layout and target-version options.
+    ///
+    /// If `options.target_version` differs from [`Self::version`], safety diagnostics are
+    /// recomputed under the target version before any change is returned.
     #[must_use]
     pub fn format_with(&self, options: &crate::FormatOptions) -> crate::FormatOutcome {
         crate::formatter::format(self, options)

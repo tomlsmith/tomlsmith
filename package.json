@@ -1,0 +1,30 @@
+{
+  "name": "tomlsmith-npm-workspace",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.22.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "npm:build": "tsx npm/scripts/build.ts",
+    "npm:check": "tsx npm/scripts/package.ts check",
+    "npm:pack": "tsx npm/scripts/package.ts pack --include-cli",
+    "npm:pack:cli": "tsx npm/scripts/package.ts pack-cli",
+    "npm:package": "cargo build --release --package tomlsmith-cli && pnpm npm:stage --binary target/release/tomlsmith && pnpm npm:build && pnpm npm:check && pnpm npm:pack",
+    "npm:publish": "tsx npm/scripts/package.ts publish",
+    "npm:stage": "tsx npm/scripts/package.ts stage",
+    "npm:test": "cargo build --package tomlsmith-cli && pnpm npm:stage --binary target/debug/tomlsmith && pnpm npm:build && pnpm npm:check && pnpm npm:pack && vitest run --config npm/vitest.config.ts",
+    "npm:test:packed": "vitest run --config npm/vitest.config.ts -t \"the packed npm distribution installs an executable native CLI\"",
+    "npm:test:watch": "vitest --config npm/vitest.config.ts",
+    "npm:typecheck": "tsc --project npm/tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "commander": "15.0.0",
+    "esbuild": "0.28.2",
+    "tsx": "4.23.12",
+    "typescript": "7.0.2",
+    "vitest": "4.1.11"
+  }
+}

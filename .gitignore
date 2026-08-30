@@ -1,4 +1,12 @@
 /target/
+/node_modules/
+**/node_modules/
+/npm/cli/dist/
+/npm/cli/LICENSE
+/npm/platforms/*/bin/
+/npm/platforms/*/LICENSE
+/npm/dist/
+*.tgz
 .DS_Store
 
 # Local research, decision records, plans, and agent context are not release artifacts.

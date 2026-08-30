@@ -45,16 +45,21 @@ jobs:
       - name: Run Rust tests
         run: cargo test --workspace --all-features
 
-      # The rowan gate greps the lib's rustdoc output; run it before the
-      # workspace-wide doc build, whose colliding tomlsmith bin target would
-      # otherwise overwrite the lib pages the gate inspects.
       - name: Check that Rowan is absent from the public API
         run: bash .github/scripts/check-rowan-api.sh
 
+      # Library targets avoid the `tomlsmith` CLI binary colliding with the
+      # public `tomlsmith` library's rustdoc output path.
       - name: Check documentation
-        run: cargo doc --workspace --no-deps
+        run: cargo doc --workspace --no-deps --lib
         env:
           RUSTDOCFLAGS: -D warnings
+
+      - name: Check release manifests and package contents
+        run: |
+          rg --fixed-strings 'tomlsmith = { version = "0.1.0", path = "crates/tomlsmith" }' Cargo.toml
+          cargo package --locked --package tomlsmith --no-verify
+          cargo package --locked --package tomlsmith-lsp --list > /dev/null
 
   msrv:
     name: Minimum supported Rust version
@@ -79,6 +84,65 @@ jobs:
       - name: Check the workspace on the minimum Rust version
         run: cargo +1.85.0 check --workspace --all-targets --all-features
 
+  wasm-contract:
+    name: WebAssembly runtime contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out TomlSmith
+        uses: actions/checkout@v7
+        with:
+          path: tomlsmith
+
+      - name: Check out the pinned Playground contract
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository_owner }}/playground
+          ref: 2c92b87576061f958164421615fa137e94b2bc9e
+          path: tomlsmith-playground
+
+      - name: Install Playground Rust toolchain
+        working-directory: tomlsmith-playground
+        run: rustup toolchain install
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tomlsmith-playground
+          shared-key: wasm-contract
+
+      - name: Cache wasm-bindgen CLI
+        id: cache-wasm-bindgen
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/bin/wasm-bindgen*
+          key: wasm-bindgen-cli-0.2.101-${{ runner.os }}
+
+      - name: Install wasm-bindgen CLI
+        if: steps.cache-wasm-bindgen.outputs.cache-hit != 'true'
+        working-directory: tomlsmith-playground
+        run: cargo install wasm-bindgen-cli --version 0.2.101 --locked
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11.22.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: tomlsmith-playground/.node-version
+          cache: pnpm
+          cache-dependency-path: tomlsmith-playground/pnpm-lock.yaml
+
+      - name: Install Playground dependencies
+        working-directory: tomlsmith-playground
+        run: pnpm install --frozen-lockfile
+
+      - name: Run real WebAssembly analysis and formatting tests
+        working-directory: tomlsmith-playground
+        run: pnpm test
+
   cross-platform:
     name: Tests on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -102,6 +166,45 @@ jobs:
 
       - name: Run Rust tests
         run: cargo test --workspace --all-features
+
+  npm-cli:
+    name: npm CLI on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+        shell: bash
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: npm-cli-${{ matrix.os }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install npm workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check npm tooling
+        run: pnpm npm:typecheck
+
+      - name: Build, pack, install, and test the npm CLI
+        run: pnpm npm:test
 
   toml-test:
     name: TOML conformance

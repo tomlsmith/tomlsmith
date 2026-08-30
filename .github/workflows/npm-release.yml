@@ -1,0 +1,213 @@
+name: npm release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+
+jobs:
+  validate:
+    name: Validate release metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install npm workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check release version
+        id: version
+        shell: bash
+        run: |
+          package_version=$(node -p "require('./npm/cli/package.json').version")
+          if [[ "v${package_version}" != "${GITHUB_REF_NAME}" ]]; then
+            echo "tag ${GITHUB_REF_NAME} does not match npm version ${package_version}" >&2
+            exit 1
+          fi
+          echo "version=${package_version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Type-check npm tooling
+        run: pnpm npm:typecheck
+
+      - name: Validate package manifests
+        run: pnpm npm:check
+
+  build-native:
+    name: Build ${{ matrix.platform }}-${{ matrix.arch }}
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26
+            platform: darwin
+            arch: arm64
+            rust_target: aarch64-apple-darwin
+            binary_path: target/aarch64-apple-darwin/release/tomlsmith
+            macos_deployment_target: "11.0"
+            musl: false
+          - runner: macos-15-intel
+            platform: darwin
+            arch: x64
+            rust_target: x86_64-apple-darwin
+            binary_path: target/x86_64-apple-darwin/release/tomlsmith
+            macos_deployment_target: "10.15"
+            musl: false
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            rust_target: aarch64-unknown-linux-musl
+            binary_path: target/aarch64-unknown-linux-musl/release/tomlsmith
+            macos_deployment_target: ""
+            musl: true
+          - runner: ubuntu-24.04
+            platform: linux
+            arch: x64
+            rust_target: x86_64-unknown-linux-musl
+            binary_path: target/x86_64-unknown-linux-musl/release/tomlsmith
+            macos_deployment_target: ""
+            musl: true
+          - runner: windows-latest
+            platform: win32
+            arch: x64
+            rust_target: x86_64-pc-windows-msvc
+            binary_path: target/x86_64-pc-windows-msvc/release/tomlsmith.exe
+            macos_deployment_target: ""
+            musl: false
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install pinned Rust toolchain and release target
+        shell: bash
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add "${{ matrix.rust_target }}"
+
+      - name: Install musl linker
+        if: matrix.musl
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools
+
+      - name: Build native CLI
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_deployment_target }}
+        run: cargo build --locked --release --package tomlsmith-cli --target ${{ matrix.rust_target }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install npm workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Stage native binary
+        run: pnpm npm:stage --binary ${{ matrix.binary_path }} --platform ${{ matrix.platform }} --arch ${{ matrix.arch }}
+
+      - name: Validate package manifests
+        run: pnpm npm:check
+
+      - name: Pack native package
+        run: pnpm exec tsx npm/scripts/package.ts pack --output npm/dist --platform ${{ matrix.platform }} --arch ${{ matrix.arch }}
+
+      - name: Build and pack the public launcher
+        run: |
+          pnpm npm:build
+          pnpm npm:pack:cli --output npm/dist
+
+      - name: Test the installed release artifacts
+        run: pnpm npm:test:packed
+
+      - name: Upload native package
+        uses: actions/upload-artifact@v7
+        with:
+          name: npm-${{ matrix.platform }}-${{ matrix.arch }}
+          path: npm/dist/tomlsmith-cli-${{ matrix.platform }}-${{ matrix.arch }}-*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish npm packages ${{ needs.validate.outputs.version }}
+    needs: [validate, build-native]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Download native packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: npm-*
+          path: npm/dist
+          merge-multiple: true
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js for trusted publishing
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Install npm workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and pack public launcher
+        run: |
+          pnpm npm:build
+          pnpm npm:pack:cli --output npm/dist
+
+      - name: Install npm CLI with trusted publishing support
+        run: npm install --global npm@11.17.0
+
+      - name: Publish platform packages before the public launcher
+        run: pnpm npm:publish --input npm/dist
+        env:
+          # Bootstrap only: remove NPM_TOKEN after every package has this
+          # workflow configured as its trusted publisher. npm prefers OIDC
+          # automatically when the trusted-publisher relationship exists.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

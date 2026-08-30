@@ -25,10 +25,10 @@ This file covers the language core: the `tomlsmith` library, `tomlsmith-cli`, an
 - [x] Version-specific diagnostics without auto-detection
 - [x] Generated internal typed AST over the private syntax representation
 - [x] Exact string, integer, float, date, time, and datetime validation
-- [x] Official conformance-suite integration with zero failures and zero skips
+- [x] `toml-test` decoder coverage for TOML 1.0 and 1.1
 - [ ] Fuzzing for termination, panic freedom, and losslessness
 
-The decoder gate pins official `toml-test` v2.2.0 and runs every embedded case: TOML 1.0.0 passes 205 valid and 474 invalid cases; TOML 1.1.0 passes 214 valid and 467 invalid cases. No allowlist or skip list is used. Project regressions also cover upstream blind spots including RFC 3339 leap-second placement, invalid UTF-8 adapters, BOM preservation, lone carriage returns in value position, and bounded nesting. This milestone is a parser/decoder conformance claim, not a claim that every editor feature is production-ready.
+The decoder gate runs every configured `toml-test` case: TOML 1.0.0 passes 205 valid and 474 invalid cases; TOML 1.1.0 passes 214 valid and 467 invalid cases. No allowlist or skip list is used. Project regression tests also cover RFC 3339 leap-second placement, invalid UTF-8 adapters, BOM preservation, lone carriage returns in value position, and bounded nesting. This milestone covers parsing and decoding, not editor features.
 
 ## Phase 2: semantic model and safe formatting
 
@@ -39,8 +39,8 @@ The decoder gate pins official `toml-test` v2.2.0 and runs every embedded case: 
 - [x] Preserve literal spelling and comment text in covered formatter cases
 - [x] Refuse full-document formatting around parse, version, and semantic errors
 - [x] Path-indexed namespace checks and trie-based inline-table conflict detection (linear-time semantic lowering)
-- [x] Profile-driven lowering optimizations: green-tree traversal, `Arc<str>` key segments end to end, borrow-based value splitting, and byte-level validation scans (~2.7x faster full parse on the 131 KB benchmark fixture)
-- [x] Cold-start optimizations: fat-LTO release profile, lazily materialized semantic root and resolve index, validate/highlight parallelism inside parse, byte-advancing lexer, and a fused `Document::parse_and_format_with` path
+- [x] Profile-driven lowering optimizations: green-tree traversal, `Arc<str>` key segments end to end, borrow-based value splitting, and byte-level validation scans
+- [x] Cold-start optimizations: fat-LTO release profile, lazily materialized semantic root and resolve index, native-target validate/highlight overlap, a sequential WebAssembly path, byte-advancing lexer, and a fused `Document::parse_and_format_with` path
 - [ ] Complete formatter behavior for all TOML structures and comment positions
 - [ ] Minimal edits for editor integrations
 
@@ -52,6 +52,7 @@ The decoder gate pins official `toml-test` v2.2.0 and runs every embedded case: 
 - [x] LSP incremental synchronization and diagnostics
 - [x] LSP formatting, semantic tokens, symbols, folding, and hover
 - [x] LSP line-index position conversion, specification-conforming position clamping, and per-request panic isolation
+- [x] Warning-free public Rust API documentation enforced by `missing_docs` and rustdoc release gates
 - [ ] Schema-aware diagnostics, completion, and code actions
 - [ ] LSP server documentation for non-VS Code clients (capabilities, `initializationOptions`)
 
@@ -71,12 +72,14 @@ Incremental parsing is an internal optimization, not a user-visible semantic mod
 
 ## Phase 5: distribution
 
-Correctness that cannot be installed converts no users; distribution is its own
-track rather than an afterthought of 1.0.
+Correctness that cannot be installed converts no users; distribution is its own track rather than an afterthought of 1.0.
 
-- [ ] Publish 0.x crates to crates.io (pre-1.0 semver; the API may still change)
-- [ ] Prebuilt CLI/LSP binaries on GitHub Releases with `cargo-binstall` metadata
-- [ ] MSRV and supported-platform policy documented alongside the release artifacts
+- [x] Build and test an npm workspace with a TypeScript launcher, exact-version native platform packages, and installed-tarball smoke coverage
+- [ ] Publish `@tomlsmith/cli` and its native platform packages to npm as the primary CLI distribution
+- [ ] Publish the public 0.x Rust library and LSP crates to crates.io; keep the Rust CLI adapter private
+- [x] Build, process-smoke, archive, and checksum CLI/LSP binaries for every release target before a GitHub Release is created
+- [ ] Prebuilt CLI/LSP binaries on GitHub Releases as the no-Node installation path
+- [x] Document the MSRV, tested targets, distribution targets, and support-change policy
 
 Extension packaging and marketplace listing are tracked in the [VS Code repository roadmap](https://github.com/tomlsmith/vscode-plugin/blob/main/docs/roadmap.md); the hosted playground is tracked in the [playground repository roadmap](https://github.com/tomlsmith/playground/blob/main/docs/roadmap.md).
 

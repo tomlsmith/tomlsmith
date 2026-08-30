@@ -1,0 +1,18 @@
+{
+  "name": "@tomlsmith/cli-win32-x64",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TomlSmith native binary for Windows x64",
+  "preferUnplugged": true,
+  "files": ["bin/tomlsmith.exe"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tomlsmith/tomlsmith.git",
+    "directory": "npm/platforms/win32-x64"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

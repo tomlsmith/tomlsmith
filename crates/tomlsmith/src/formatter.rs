@@ -2,19 +2,28 @@ use std::sync::Arc;
 
 use crate::{Diagnostic, Document, SyntaxKind, TextRange, TomlVersion, syntax::lexer};
 
+/// How formatted output chooses newline bytes.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum LineEnding {
+    /// Use the first newline style found in the source, falling back to LF.
     #[default]
     Preserve,
+    /// Write line feed (`\n`) newlines.
     Lf,
+    /// Write carriage-return and line-feed (`\r\n`) newlines.
     CrLf,
 }
 
+/// Layout and language-version settings for guarded formatting.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FormatOptions {
+    /// The TOML version that the formatted output must satisfy.
     pub target_version: TomlVersion,
+    /// Spaces written for each nested array or inline-table indentation level.
     pub indent_width: u8,
+    /// Preferred maximum line width used when deciding whether container items should wrap.
     pub line_width: u16,
+    /// Newline style written by the formatter.
     pub line_ending: LineEnding,
 }
 
@@ -29,6 +38,10 @@ impl Default for FormatOptions {
     }
 }
 
+/// A replacement over the original snapshot's UTF-8 byte offsets.
+///
+/// Formatter edits currently describe the complete replacement required to produce the returned
+/// text; they are not a minimal-edit contract. Editor adapters may derive smaller protocol edits.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TextEdit {
     range: TextRange,
@@ -36,6 +49,7 @@ pub struct TextEdit {
 }
 
 impl TextEdit {
+    /// Creates a replacement edit.
     #[must_use]
     pub fn new(range: TextRange, replacement: impl Into<Arc<str>>) -> Self {
         Self {
@@ -44,25 +58,34 @@ impl TextEdit {
         }
     }
 
+    /// Returns the half-open source byte range replaced by this edit.
     #[must_use]
     pub const fn range(&self) -> TextRange {
         self.range
     }
 
+    /// Returns the replacement text.
     #[must_use]
     pub fn replacement(&self) -> &str {
         &self.replacement
     }
 }
 
+/// The result of guarded full-document formatting.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FormatOutcome {
+    /// The source already matches the selected layout.
     Unchanged,
+    /// Formatting is safe and changes the source.
     Changed {
+        /// Complete formatted document text.
         text: Arc<str>,
+        /// Replacements that transform the original snapshot into `text`.
         edits: Arc<[TextEdit]>,
     },
+    /// Formatting was not attempted because the source is unsafe to rewrite.
     Refused {
+        /// Parse, version, or semantic errors responsible for the refusal.
         diagnostics: Arc<[Diagnostic]>,
     },
 }

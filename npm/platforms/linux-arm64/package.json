@@ -1,0 +1,18 @@
+{
+  "name": "@tomlsmith/cli-linux-arm64",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TomlSmith statically linked native binary for Linux ARM64",
+  "preferUnplugged": true,
+  "files": ["bin/tomlsmith"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tomlsmith/tomlsmith.git",
+    "directory": "npm/platforms/linux-arm64"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

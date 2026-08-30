@@ -615,9 +615,9 @@ fn resolve_options(settings: &serde_json::Value) -> ResolvedOptions {
 }
 
 fn resolve_toml_version(settings: &serde_json::Value) -> TomlVersion {
-    // The released TOML specification is 1.0, and ecosystem files such as
-    // Cargo.toml and pyproject.toml are parsed by 1.0 toolchains; TOML 1.1
-    // is an explicit opt-in.
+    // Both 1.0 and 1.1 are published specifications. The editor-facing default
+    // remains 1.0 because many ecosystem consumers still accept only 1.0;
+    // clients can opt in to 1.1 explicitly.
     match settings
         .get("tomlVersion")
         .and_then(serde_json::Value::as_str)

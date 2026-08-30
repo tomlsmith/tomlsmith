@@ -7,6 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+readme = "README.md"
+keywords = ["toml", "lsp", "language-server", "editor"]
+categories = ["development-tools", "text-editors", "command-line-utilities"]
 
 [lib]
 path = "src/lib.rs"
