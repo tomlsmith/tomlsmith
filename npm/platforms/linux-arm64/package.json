@@ -1,6 +1,6 @@
 {
   "name": "@tomlsmith/cli-linux-arm64",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "TomlSmith statically linked native binary for Linux ARM64",
   "preferUnplugged": true,
