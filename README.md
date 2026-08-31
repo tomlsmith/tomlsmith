@@ -8,6 +8,9 @@
 
 **Parse, check, and format TOML 1.0 and 1.1 from Rust, the command line, or an editor.**
 
+
+https://github.com/user-attachments/assets/1a6e65f9-e0f2-43de-8428-6bea7a4078c6
+
 ## Features
 
 In the terminal and CI:
