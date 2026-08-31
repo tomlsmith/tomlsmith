@@ -296,6 +296,7 @@ pub struct Declaration {
     kind: DeclarationKind,
     value: Option<SemanticValue>,
     range: TextRange,
+    name_range: TextRange,
     // Trimmed span of the first invalid payload inside `value`, so the
     // INVALID_VALUE diagnostic can point at the offending element instead
     // of the whole declaration.
@@ -331,6 +332,12 @@ impl Declaration {
     #[must_use]
     pub const fn range(&self) -> TextRange {
         self.range
+    }
+
+    /// Returns the declaration key's UTF-8 byte range, excluding table delimiters and values.
+    #[must_use]
+    pub const fn name_range(&self) -> TextRange {
+        self.name_range
     }
 }
 
@@ -527,6 +534,7 @@ impl<'source> LoweringState<'source> {
             kind: DeclarationKind::Table,
             value: None,
             range: node_range(node, offset),
+            name_range: statement_key_range(node, offset),
             first_invalid_range: None,
             scope,
             element_scope: None,
@@ -572,6 +580,7 @@ impl<'source> LoweringState<'source> {
             kind: DeclarationKind::ArrayTable,
             value: None,
             range: node_range(node, offset),
+            name_range: statement_key_range(node, offset),
             first_invalid_range: None,
             scope,
             element_scope: Some(element_scope),
@@ -1017,11 +1026,19 @@ fn lower_key_value(
         kind: DeclarationKind::KeyValue,
         value: Some(value),
         range: node_range(node, offset),
+        name_range: statement_key_range(node, offset),
         first_invalid_range,
         scope,
         element_scope: None,
         promotes_implicit_table: false,
     });
+}
+
+fn statement_key_range(node: &rowan::GreenNodeData, offset: usize) -> TextRange {
+    child_node(node, offset, SyntaxKind::Key).map_or_else(
+        || node_range(node, offset),
+        |(key, key_offset)| node_range(key, key_offset),
+    )
 }
 
 fn enclosing_array_scope(path: &[Arc<str>], active: &[(Vec<Arc<str>>, u32)]) -> Option<u32> {
@@ -2214,6 +2231,7 @@ mod tests {
             kind,
             value: None,
             range: TextRange::default(),
+            name_range: TextRange::default(),
             first_invalid_range: None,
             scope,
             element_scope: None,

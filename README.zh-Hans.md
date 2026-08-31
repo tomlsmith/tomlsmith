@@ -46,7 +46,7 @@ tomlsmith parse Cargo.toml
 tomlsmith --toml-version 1.0 check Cargo.toml
 ```
 
-为兼容现有编辑器生态，各入口的默认值并不完全相同：LSP 与 VS Code 扩展默认使用 TOML 1.0。完整矩阵和接入规则见 [TOML 版本策略](docs/version-policy.md)。
+库、CLI、LSP 与 VS Code 扩展现在都默认使用 TOML 1.1。只有文件必须由仅支持 1.0 的消费端读取时，才需要显式选择 TOML 1.0；完整矩阵和接入规则见 [TOML 版本策略](docs/version-policy.md)。
 
 所有命令都可以读取文件路径或使用 `-` 从标准输入读取。运行 `tomlsmith --help` 可列出全部命令与参数。仓库仍维护面向 Node.js 使用者的可选 npm wrapper，但 CLI 和其他 TomlSmith 仓库都不依赖它。
 

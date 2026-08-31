@@ -10,10 +10,11 @@ use lsp_types::{
     FoldingRange, FoldingRangeKind, FoldingRangeParams, FoldingRangeProviderCapability, Hover,
     HoverContents, HoverParams, HoverProviderCapability, InitializeResult, Location,
     LogMessageParams, MarkupContent, MarkupKind, MessageType, NumberOrString, OneOf, Position,
-    PositionEncodingKind, PublishDiagnosticsParams, Range, SemanticToken, SemanticTokenType,
-    SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions,
-    SemanticTokensParams, ServerCapabilities, ServerInfo, ShowMessageParams, SymbolInformation,
-    SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, Uri, WorkDoneProgressOptions,
+    PositionEncodingKind, PublishDiagnosticsParams, Range, SemanticToken, SemanticTokenModifier,
+    SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
+    SemanticTokensOptions, SemanticTokensParams, ServerCapabilities, ServerInfo, ShowMessageParams,
+    SymbolInformation, SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
+    WorkDoneProgressOptions,
 };
 use tomlsmith::{
     Declaration, DeclarationKind, DiagnosticCode, Document, FormatOptions, FormatOutcome,
@@ -604,8 +605,7 @@ struct ResolvedOptions {
 fn resolve_options(settings: &serde_json::Value) -> ResolvedOptions {
     let toml_version = resolve_toml_version(settings);
     // Every field is spelled out so a new option cannot silently inherit a
-    // struct default (such as the core's TOML 1.1 `TomlVersion::default()`)
-    // instead of the documented absent-option fallback.
+    // struct default instead of the documented absent-option fallback.
     ResolvedOptions {
         toml_version,
         format_options: resolve_format_options(settings, toml_version),
@@ -615,15 +615,14 @@ fn resolve_options(settings: &serde_json::Value) -> ResolvedOptions {
 }
 
 fn resolve_toml_version(settings: &serde_json::Value) -> TomlVersion {
-    // Both 1.0 and 1.1 are published specifications. The editor-facing default
-    // remains 1.0 because many ecosystem consumers still accept only 1.0;
-    // clients can opt in to 1.1 explicitly.
+    // TOML 1.1 is the latest published language and accepts TOML 1.0 documents.
+    // Clients targeting a 1.0-only consumer can select strict 1.0 explicitly.
     match settings
         .get("tomlVersion")
         .and_then(serde_json::Value::as_str)
     {
-        Some("1.1") => TomlVersion::V1_1,
-        _ => TomlVersion::V1_0,
+        Some("1.0") => TomlVersion::V1_0,
+        _ => TomlVersion::V1_1,
     }
 }
 
@@ -1218,6 +1217,7 @@ fn declaration_symbol(
     index: &LineIndex,
 ) -> DocumentSymbol {
     let header = to_lsp_range(text, index, declaration.range());
+    let selection = to_lsp_range(text, index, declaration.name_range());
     DocumentSymbol {
         name,
         detail: declaration
@@ -1228,7 +1228,7 @@ fn declaration_symbol(
         tags: None,
         deprecated: None,
         range: header,
-        selection_range: header,
+        selection_range: selection,
         children: None,
     }
 }
@@ -1309,11 +1309,13 @@ fn semantic_tokens(document: &Document, index: &LineIndex) -> SemanticTokens {
         .highlights()
         .iter()
         .flat_map(|highlight| {
+            let kind = highlight.kind();
             token_segments(
                 document.text(),
                 index,
                 highlight.range(),
-                semantic_token_type(highlight.kind()),
+                semantic_token_type(kind),
+                semantic_token_modifiers(kind, highlight.is_inline_table_member()),
             )
         })
         .collect::<Vec<_>>();
@@ -1337,7 +1339,7 @@ fn semantic_tokens(document: &Document, index: &LineIndex) -> SemanticTokens {
                 delta_start,
                 length: token.length,
                 token_type: token.token_type,
-                token_modifiers_bitset: 0,
+                token_modifiers_bitset: token.token_modifiers_bitset,
             }
         })
         .collect();
@@ -1353,6 +1355,7 @@ struct AbsoluteToken {
     start: u32,
     length: u32,
     token_type: u32,
+    token_modifiers_bitset: u32,
 }
 
 fn token_segments(
@@ -1360,6 +1363,7 @@ fn token_segments(
     index: &LineIndex,
     range: TextRange,
     token_type: u32,
+    token_modifiers_bitset: u32,
 ) -> Vec<AbsoluteToken> {
     let mut segments = Vec::new();
     let mut start = usize::try_from(range.start()).unwrap_or(text.len());
@@ -1382,6 +1386,7 @@ fn token_segments(
                     start: start_position.character,
                     length: end_position.character - start_position.character,
                     token_type,
+                    token_modifiers_bitset,
                 });
             }
         }
@@ -1404,6 +1409,28 @@ const fn semantic_token_type(kind: HighlightKind) -> u32 {
         HighlightKind::Punctuation => 6,
         HighlightKind::DateTime => 7,
         HighlightKind::Invalid => 8,
+    }
+}
+
+const fn semantic_token_modifiers(kind: HighlightKind, inline_table_member: bool) -> u32 {
+    let value_shape = match kind {
+        HighlightKind::ArrayKey => 1,
+        HighlightKind::InlineTableKey => 1 << 1,
+        HighlightKind::ArrayTable => 1 << 2,
+        HighlightKind::Key
+        | HighlightKind::Table
+        | HighlightKind::String
+        | HighlightKind::Number
+        | HighlightKind::Boolean
+        | HighlightKind::DateTime
+        | HighlightKind::Comment
+        | HighlightKind::Punctuation
+        | HighlightKind::Invalid => 0,
+    };
+    if inline_table_member {
+        value_shape | (1 << 3)
+    } else {
+        value_shape
     }
 }
 
@@ -1567,7 +1594,12 @@ fn capabilities() -> ServerCapabilities {
                         SemanticTokenType::new("tomlDateTime"),
                         SemanticTokenType::new("tomlInvalid"),
                     ],
-                    token_modifiers: Vec::new(),
+                    token_modifiers: vec![
+                        SemanticTokenModifier::new("tomlArray"),
+                        SemanticTokenModifier::new("tomlInlineTable"),
+                        SemanticTokenModifier::new("tomlArrayTable"),
+                        SemanticTokenModifier::new("tomlInlineTableMember"),
+                    ],
                 },
                 range: None,
                 full: Some(SemanticTokensFullOptions::Bool(true)),

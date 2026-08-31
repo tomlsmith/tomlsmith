@@ -142,7 +142,7 @@ fn null_or_empty_settings_restatements_keep_initialization_options() {
             }))
             .unwrap();
 
-        // A wipe to the 1.0 default would reparse and republish with a
+        // A wipe to a different version would reparse and republish with a
         // version.toml-1.1-syntax error.
         match client.receiver.recv_timeout(Duration::from_millis(500)) {
             Ok(Message::Notification(republished)) => {

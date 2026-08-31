@@ -352,6 +352,15 @@ fn initialize_advertises_the_supported_document_features() {
             "tomlInvalid"
         ])
     );
+    assert_eq!(
+        result["capabilities"]["semanticTokensProvider"]["legend"]["tokenModifiers"],
+        json!([
+            "tomlArray",
+            "tomlInlineTable",
+            "tomlArrayTable",
+            "tomlInlineTableMember"
+        ])
+    );
 
     client
         .sender
@@ -424,7 +433,7 @@ fn initialization_can_select_strict_toml_1_0_core_rules() {
 }
 
 #[test]
-fn absent_initialization_options_default_to_strict_toml_1_0() {
+fn absent_initialization_options_default_to_toml_1_1() {
     let (client, server_thread) = initialized_server();
 
     client
@@ -448,21 +457,13 @@ fn absent_initialization_options_default_to_strict_toml_1_0() {
     else {
         panic!("didOpen must publish diagnostics")
     };
-    assert!(
-        published.params["diagnostics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|diagnostic| diagnostic["code"] == "version.toml-1.1-syntax"),
-        "TOML 1.0 must be the default without initialization options: {:?}",
-        published.params
-    );
+    assert_eq!(published.params["diagnostics"], json!([]));
 
     finish_server(client, server_thread);
 }
 
 #[test]
-fn unrecognized_toml_version_values_fall_back_to_1_0() {
+fn unrecognized_toml_version_values_fall_back_to_1_1() {
     let (client, server_thread) = initialized_server_with_options(&json!({"tomlVersion": "2.0"}));
 
     client
@@ -486,21 +487,13 @@ fn unrecognized_toml_version_values_fall_back_to_1_0() {
     else {
         panic!("didOpen must publish diagnostics")
     };
-    assert!(
-        published.params["diagnostics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|diagnostic| diagnostic["code"] == "version.toml-1.1-syntax"),
-        "an unrecognized tomlVersion must fall back to 1.0: {:?}",
-        published.params
-    );
+    assert_eq!(published.params["diagnostics"], json!([]));
 
     finish_server(client, server_thread);
 }
 
 #[test]
-fn toml_1_1_is_an_explicit_opt_in() {
+fn explicit_toml_1_1_accepts_toml_1_1_syntax() {
     let (client, server_thread) = initialized_server_with_options(&json!({"tomlVersion": "1.1"}));
 
     client
@@ -874,7 +867,7 @@ fn semantic_tokens_are_derived_from_core_highlights_and_encoded_as_utf16() {
 }
 
 #[test]
-fn semantic_tokens_distinguish_properties_from_table_namespaces() {
+fn semantic_tokens_keep_standard_types_and_distinguish_toml_structures() {
     let (client, server_thread) = initialized_server();
     let uri = "file:///workspace/structural-highlights.toml";
     client
@@ -921,19 +914,75 @@ fn semantic_tokens_distinguish_properties_from_table_namespaces() {
                 1, 0, 6, 0, 0,
                 0, 6, 1, 6, 0,
                 0, 1, 1, 3, 0,
-                1, 0, 5, 0, 0,
+                1, 0, 5, 0, 1,
                 0, 5, 1, 6, 0,
                 0, 1, 1, 6, 0,
                 0, 1, 1, 6, 0,
-                1, 0, 6, 0, 0,
+                1, 0, 6, 0, 2,
                 0, 6, 1, 6, 0,
                 0, 1, 1, 6, 0,
                 0, 1, 1, 6, 0,
                 1, 0, 1, 6, 0,
                 0, 1, 1, 6, 0,
-                0, 1, 3, 1, 0,
+                0, 1, 3, 1, 4,
                 0, 3, 1, 6, 0,
                 0, 1, 1, 6, 0
+            ]
+        })
+    );
+
+    finish_server(client, server_thread);
+}
+
+#[test]
+fn semantic_tokens_distinguish_inline_table_container_and_member_keys() {
+    let (client, server_thread) = initialized_server();
+    let uri = "file:///workspace/inline-table-highlights.toml";
+    client
+        .sender
+        .send(Message::Notification(Notification {
+            method: "textDocument/didOpen".to_owned(),
+            params: json!({
+                "textDocument": {
+                    "uri": uri,
+                    "languageId": "toml",
+                    "version": 1,
+                    "text": "criterion = { version = \"0.8.2\" }\n"
+                }
+            }),
+        }))
+        .unwrap();
+    let _opened = client
+        .receiver
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap();
+
+    client
+        .sender
+        .send(Message::Request(Request {
+            id: RequestId::from(23),
+            method: "textDocument/semanticTokens/full".to_owned(),
+            params: json!({"textDocument": {"uri": uri}}),
+        }))
+        .unwrap();
+    let Message::Response(response) = client
+        .receiver
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+    else {
+        panic!("semantic tokens must return a response")
+    };
+    assert_eq!(
+        response.response_result.unwrap(),
+        json!({
+            "data": [
+                0, 0, 9, 0, 2,
+                0, 10, 1, 6, 0,
+                0, 2, 1, 6, 0,
+                0, 2, 7, 0, 8,
+                0, 8, 1, 6, 0,
+                0, 2, 7, 2, 0,
+                0, 8, 1, 6, 0
             ]
         })
     );
@@ -970,7 +1019,7 @@ fn document_symbols_come_from_core_semantic_declarations() {
     assert_eq!(symbols[0]["kind"], 3);
     // The table's full range spans its body so breadcrumbs and sticky
     // scroll keep the header active inside the table; its selection range
-    // stays on the header itself.
+    // stays on the key so Outline navigation excludes the brackets.
     assert_eq!(
         symbols[0]["range"],
         json!({
@@ -981,8 +1030,8 @@ fn document_symbols_come_from_core_semantic_declarations() {
     assert_eq!(
         symbols[0]["selectionRange"],
         json!({
-            "start": {"line": 0, "character": 0},
-            "end": {"line": 0, "character": 7}
+            "start": {"line": 0, "character": 1},
+            "end": {"line": 0, "character": 6}
         })
     );
     let children = symbols[0]["children"].as_array().unwrap();
@@ -1955,7 +2004,7 @@ fn duplicate_key_diagnostics_link_the_first_declaration_when_supported() {
 
 #[test]
 fn changing_the_toml_version_reparses_and_republishes_every_open_document() {
-    let (client, server_thread) = initialized_server();
+    let (client, server_thread) = initialized_server_with_options(&json!({"tomlVersion": "1.0"}));
     let first = "file:///workspace/reload-one.toml";
     let second = "file:///workspace/reload-two.toml";
     for uri in [first, second] {
@@ -2013,7 +2062,7 @@ fn changing_the_toml_version_reparses_and_republishes_every_open_document() {
 
 #[test]
 fn did_change_configuration_prefers_the_tomlsmith_section_object() {
-    let (client, server_thread) = initialized_server();
+    let (client, server_thread) = initialized_server_with_options(&json!({"tomlVersion": "1.0"}));
     let uri = "file:///workspace/nested-settings.toml";
     let _opened = open_document(&client, uri, "t = { a = 1, }\n");
 
@@ -2048,6 +2097,7 @@ fn version_changes_request_a_semantic_token_refresh_when_supported() {
             id: RequestId::from(0),
             method: "initialize".to_owned(),
             params: json!({
+                "initializationOptions": {"tomlVersion": "1.0"},
                 "capabilities": {
                     "workspace": {"semanticTokens": {"refreshSupport": true}}
                 }
@@ -2126,7 +2176,7 @@ fn format_option_changes_apply_to_subsequent_formatting_requests() {
 
     change_configuration(&client, &json!({"format": {"indentWidth": 4}}));
 
-    // tomlVersion stayed at the 1.0 default, so no republish precedes the
+    // tomlVersion stayed at the 1.1 default, so no republish precedes the
     // next exchange; the new indent width must now beat the client tabSize.
     assert_eq!(
         formatted_text(&client, "values=[\n1,\n]\n", 2),

@@ -47,7 +47,7 @@ TOML 1.1 is the default. Select TOML 1.0 explicitly when needed:
 tomlsmith --toml-version 1.0 check Cargo.toml
 ```
 
-Defaults intentionally differ for editor compatibility: the LSP and VS Code extension default to TOML 1.0. See the [TOML version policy](docs/version-policy.md) for the complete matrix and integration rules.
+The library, CLI, LSP, and VS Code extension all default to TOML 1.1. Select TOML 1.0 explicitly for files that must remain readable by 1.0-only consumers; see the [TOML version policy](docs/version-policy.md) for the complete matrix and integration rules.
 
 Every command accepts a file path or `-` for standard input. Run `tomlsmith --help` to list all commands and options. An optional npm wrapper is maintained in the repository for Node.js consumers, but it is not required by the CLI or any TomlSmith repository.
 

@@ -124,6 +124,7 @@ pub(crate) fn build_text(source: &str, options: &FormatOptions) -> String {
     let newline = selected_newline(source, options.line_ending);
     let mut output = String::with_capacity(source.len());
     let mut line_start = true;
+    let mut consecutive_newlines = 0_u8;
     let mut depth = 0_usize;
     let mut delimiters = Vec::new();
 
@@ -131,6 +132,9 @@ pub(crate) fn build_text(source: &str, options: &FormatOptions) -> String {
         let raw = &source[token.range.clone()];
         let previous = significant_before(&lexed.tokens, index);
         let next = significant_after(&lexed.tokens, index);
+        if !matches!(token.kind, SyntaxKind::Whitespace | SyntaxKind::Newline) {
+            consecutive_newlines = 0;
+        }
 
         match token.kind {
             SyntaxKind::Bom => output.push_str(raw),
@@ -147,7 +151,10 @@ pub(crate) fn build_text(source: &str, options: &FormatOptions) -> String {
                 if previous != Some(SyntaxKind::Comment) {
                     trim_horizontal(&mut output);
                 }
-                output.push_str(newline);
+                if consecutive_newlines < 2 {
+                    output.push_str(newline);
+                }
+                consecutive_newlines = consecutive_newlines.saturating_add(1);
                 line_start = true;
             }
             SyntaxKind::Comment => {

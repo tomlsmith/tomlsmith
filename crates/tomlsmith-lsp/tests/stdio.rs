@@ -64,7 +64,16 @@ fn configurable_binary_path_runs_a_complete_stdio_session() {
         panic!("first stdio message must be the initialize response")
     };
     assert_eq!(initialize.id, RequestId::from(1));
-    assert!(initialize.response_result.is_ok());
+    let initialize_result = initialize.response_result.unwrap();
+    assert_eq!(
+        initialize_result["capabilities"]["semanticTokensProvider"]["legend"]["tokenModifiers"],
+        json!([
+            "tomlArray",
+            "tomlInlineTable",
+            "tomlArrayTable",
+            "tomlInlineTableMember"
+        ])
+    );
     let Message::Response(shutdown) = Message::read(&mut messages).unwrap().unwrap() else {
         panic!("second stdio message must be the shutdown response")
     };

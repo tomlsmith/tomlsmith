@@ -6,6 +6,6 @@
 tomlsmith-lsp
 ```
 
-Clients select TOML 1.0 or 1.1 and formatter options through `initializationOptions` and configuration updates. The absent-option default is TOML 1.0 for compatibility with existing ecosystem consumers; see the repository's [version policy](https://github.com/tomlsmith/tomlsmith/blob/main/docs/version-policy.md). The implemented protocol surface does not include Schema-backed completion or code actions.
+Clients select TOML 1.0 or 1.1 and formatter options through `initializationOptions` and configuration updates. The absent-option default is TOML 1.1; clients whose files must remain readable by 1.0-only consumers select TOML 1.0 explicitly. See the repository's [version policy](https://github.com/tomlsmith/tomlsmith/blob/main/docs/version-policy.md). The implemented protocol surface does not include Schema-backed completion or code actions.
 
 See the [TomlSmith repository](https://github.com/tomlsmith/tomlsmith) for editor setup, protocol configuration, and compatibility details.

@@ -34,6 +34,7 @@ pub enum HighlightKind {
 pub struct Highlight {
     kind: HighlightKind,
     range: TextRange,
+    inline_table_member: bool,
 }
 
 impl Highlight {
@@ -48,88 +49,126 @@ impl Highlight {
     pub const fn range(self) -> TextRange {
         self.range
     }
+
+    /// Returns whether this key segment is declared inside an inline table.
+    #[must_use]
+    pub const fn is_inline_table_member(self) -> bool {
+        self.inline_table_member
+    }
 }
 
 pub(crate) fn collect(source: &str, tokens: &[Token]) -> Vec<Highlight> {
     let mut highlights = Vec::new();
-    let mut in_key = true;
-    let mut in_table_header = false;
-    let mut in_array_table_header = false;
-    let mut bracket_depth = 0_u32;
-    let mut containers = Vec::new();
-    let mut pending_key_highlights = Vec::new();
-    let mut awaiting_value = false;
+    let mut state = CollectorState::new();
 
     for token in tokens {
         let raw = &source[token.range.clone()];
+        let inline_table_member = state.is_inline_table_member();
         resolve_pending_key_kind(
             token.kind,
-            &mut awaiting_value,
-            &mut pending_key_highlights,
+            &mut state.awaiting_value,
+            &mut state.pending_key_highlights,
             &mut highlights,
         );
 
-        let kind = match token.kind {
+        let kind = state.classify_token(token.kind, raw);
+
+        if let Some(kind) = kind {
+            push_highlight(
+                &mut highlights,
+                &mut state.pending_key_highlights,
+                token,
+                kind,
+                inline_table_member,
+            );
+        }
+    }
+
+    highlights
+}
+
+struct CollectorState {
+    in_key: bool,
+    header: Header,
+    bracket_depth: u32,
+    containers: Vec<Container>,
+    pending_key_highlights: Vec<usize>,
+    awaiting_value: bool,
+}
+
+impl CollectorState {
+    const fn new() -> Self {
+        Self {
+            in_key: true,
+            header: Header::None,
+            bracket_depth: 0,
+            containers: Vec::new(),
+            pending_key_highlights: Vec::new(),
+            awaiting_value: false,
+        }
+    }
+
+    fn is_inline_table_member(&self) -> bool {
+        self.in_key && self.containers.last() == Some(&Container::InlineTable)
+    }
+
+    fn classify_token(&mut self, token_kind: SyntaxKind, raw: &str) -> Option<HighlightKind> {
+        match token_kind {
             SyntaxKind::Newline => {
-                pending_key_highlights.clear();
-                if bracket_depth == 0 && containers.is_empty() {
-                    in_key = true;
-                    in_table_header = false;
-                    in_array_table_header = false;
-                }
+                self.reset_line_state();
                 None
             }
             SyntaxKind::Comment => Some(HighlightKind::Comment),
-            SyntaxKind::BasicString | SyntaxKind::LiteralString => Some(if in_key {
-                key_kind(in_table_header, in_array_table_header)
+            SyntaxKind::BasicString | SyntaxKind::LiteralString => Some(if self.in_key {
+                key_kind(self.header)
             } else {
                 HighlightKind::String
             }),
-            SyntaxKind::Bare => Some(if in_table_header {
-                key_kind(in_table_header, in_array_table_header)
-            } else if in_key {
+            SyntaxKind::Bare => Some(if self.header != Header::None {
+                key_kind(self.header)
+            } else if self.in_key {
                 HighlightKind::Key
             } else {
                 classify_value(raw)
             }),
             SyntaxKind::Equals => {
-                in_key = false;
-                awaiting_value = true;
+                self.in_key = false;
+                self.awaiting_value = true;
                 Some(HighlightKind::Punctuation)
             }
             SyntaxKind::LeftBracket => {
                 open_bracket(
-                    in_key,
-                    &mut in_table_header,
-                    &mut in_array_table_header,
-                    &mut bracket_depth,
-                    &mut containers,
+                    self.in_key,
+                    &mut self.header,
+                    &mut self.bracket_depth,
+                    &mut self.containers,
                 );
                 Some(HighlightKind::Punctuation)
             }
             SyntaxKind::RightBracket => {
-                bracket_depth = bracket_depth.saturating_sub(1);
-                if !in_table_header && containers.last() == Some(&Container::Array) {
-                    containers.pop();
+                self.bracket_depth = self.bracket_depth.saturating_sub(1);
+                if self.header == Header::None && self.containers.last() == Some(&Container::Array)
+                {
+                    self.containers.pop();
                 }
                 Some(HighlightKind::Punctuation)
             }
             SyntaxKind::LeftBrace => {
-                containers.push(Container::InlineTable);
-                in_key = true;
+                self.containers.push(Container::InlineTable);
+                self.in_key = true;
                 Some(HighlightKind::Punctuation)
             }
             SyntaxKind::RightBrace => {
-                if containers.last() == Some(&Container::InlineTable) {
-                    containers.pop();
+                if self.containers.last() == Some(&Container::InlineTable) {
+                    self.containers.pop();
                 }
-                in_key = false;
+                self.in_key = false;
                 Some(HighlightKind::Punctuation)
             }
             SyntaxKind::Comma => {
-                if containers.last() == Some(&Container::InlineTable) {
-                    pending_key_highlights.clear();
-                    in_key = true;
+                if self.containers.last() == Some(&Container::InlineTable) {
+                    self.pending_key_highlights.clear();
+                    self.in_key = true;
                 }
                 Some(HighlightKind::Punctuation)
             }
@@ -145,29 +184,33 @@ pub(crate) fn collect(source: &str, tokens: &[Token]) -> Vec<Highlight> {
             | SyntaxKind::ArrayTable
             | SyntaxKind::Array
             | SyntaxKind::InlineTable => None,
-        };
-
-        if let Some(kind) = kind {
-            push_highlight(&mut highlights, &mut pending_key_highlights, token, kind);
         }
     }
 
-    highlights
+    fn reset_line_state(&mut self) {
+        self.pending_key_highlights.clear();
+        if self.bracket_depth == 0 && self.containers.is_empty() {
+            self.in_key = true;
+            self.header = Header::None;
+        }
+    }
 }
 
 fn open_bracket(
     in_key: bool,
-    in_table_header: &mut bool,
-    in_array_table_header: &mut bool,
+    header: &mut Header,
     bracket_depth: &mut u32,
     containers: &mut Vec<Container>,
 ) {
     let starts_or_extends_table_header = in_key
         && containers.is_empty()
-        && (*bracket_depth == 0 || (*in_table_header && *bracket_depth == 1));
+        && (*bracket_depth == 0 || (*header != Header::None && *bracket_depth == 1));
     if starts_or_extends_table_header {
-        *in_table_header = true;
-        *in_array_table_header = *bracket_depth == 1;
+        *header = if *bracket_depth == 1 {
+            Header::ArrayTable
+        } else {
+            Header::Table
+        };
     } else {
         containers.push(Container::Array);
     }
@@ -179,11 +222,13 @@ fn push_highlight(
     pending_key_highlights: &mut Vec<usize>,
     token: &Token,
     kind: HighlightKind,
+    inline_table_member: bool,
 ) {
     let highlight_index = highlights.len();
     highlights.push(Highlight {
         kind,
         range: TextRange::from_usize(token.range.start, token.range.end),
+        inline_table_member: inline_table_member && kind == HighlightKind::Key,
     });
     if kind == HighlightKind::Key {
         pending_key_highlights.push(highlight_index);
@@ -211,13 +256,11 @@ fn resolve_pending_key_kind(
     *awaiting_value = false;
 }
 
-const fn key_kind(in_table_header: bool, in_array_table_header: bool) -> HighlightKind {
-    if !in_table_header {
-        HighlightKind::Key
-    } else if in_array_table_header {
-        HighlightKind::ArrayTable
-    } else {
-        HighlightKind::Table
+const fn key_kind(header: Header) -> HighlightKind {
+    match header {
+        Header::None => HighlightKind::Key,
+        Header::Table => HighlightKind::Table,
+        Header::ArrayTable => HighlightKind::ArrayTable,
     }
 }
 
@@ -231,6 +274,13 @@ fn reclassify_keys(highlights: &mut [Highlight], key_indices: &[usize], kind: Hi
 enum Container {
     Array,
     InlineTable,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Header {
+    None,
+    Table,
+    ArrayTable,
 }
 
 fn classify_value(raw: &str) -> HighlightKind {

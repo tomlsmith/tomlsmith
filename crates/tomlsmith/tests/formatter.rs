@@ -24,6 +24,22 @@ fn formatting_is_idempotent_and_preserves_literal_spelling() {
 }
 
 #[test]
+fn formatting_collapses_excess_blank_lines_to_one() {
+    let source = "[workspace.dependencies]\n\n\nclap={version=\"4.5\",features=[\"derive\"]}\nlsp-server=\"0.10\"\n\n\n\nlsp-types=\"0.97\"\n\n# Release binaries\n";
+    let expected = "[workspace.dependencies]\n\nclap = { version = \"4.5\", features = [\"derive\"] }\nlsp-server = \"0.10\"\n\nlsp-types = \"0.97\"\n\n# Release binaries\n";
+
+    let FormatOutcome::Changed { text, .. } = Document::parse(source).format() else {
+        panic!("excess blank lines should be collapsed");
+    };
+
+    assert_eq!(text.as_ref(), expected);
+    assert!(matches!(
+        Document::parse(text).format(),
+        FormatOutcome::Unchanged
+    ));
+}
+
+#[test]
 fn formatting_refuses_structurally_invalid_documents() {
     let document = Document::parse("title = \"unterminated\n");
 

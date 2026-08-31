@@ -88,6 +88,41 @@ fn inline_table_value_keys_are_distinct_from_nested_scalar_keys() {
 }
 
 #[test]
+fn inline_table_members_retain_their_container_context() {
+    let source =
+        "criterion = { version = \"0.8.2\", nested = { enabled = true }, features = [] }\n";
+    let document = Document::parse(source);
+    let keys = document
+        .highlights()
+        .iter()
+        .filter(|highlight| {
+            matches!(
+                highlight.kind(),
+                HighlightKind::Key | HighlightKind::ArrayKey | HighlightKind::InlineTableKey
+            )
+        })
+        .map(|highlight| {
+            (
+                highlight.kind(),
+                &source[highlight.range().start() as usize..highlight.range().end() as usize],
+                highlight.is_inline_table_member(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        keys,
+        vec![
+            (HighlightKind::InlineTableKey, "criterion", false),
+            (HighlightKind::Key, "version", true),
+            (HighlightKind::InlineTableKey, "nested", true),
+            (HighlightKind::Key, "enabled", true),
+            (HighlightKind::ArrayKey, "features", true),
+        ]
+    );
+}
+
+#[test]
 fn array_table_headers_do_not_leak_into_following_assignments() {
     let source = "[[products]]\nname = \"Hammer\"\nprice = 10\n";
     let document = Document::parse(source);
