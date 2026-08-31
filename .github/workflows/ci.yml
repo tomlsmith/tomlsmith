@@ -57,7 +57,7 @@ jobs:
 
       - name: Check release manifests and package contents
         run: |
-          grep --fixed-strings 'tomlsmith = { version = "0.2.0", path = "crates/tomlsmith" }' Cargo.toml
+          grep --fixed-strings 'tomlsmith = { version = "0.3.0", path = "crates/tomlsmith" }' Cargo.toml
           cargo package --locked --package tomlsmith --no-verify
           cargo package --locked --package tomlsmith-cli --list > /dev/null
           cargo package --locked --package tomlsmith-lsp --list > /dev/null
