@@ -8,6 +8,8 @@
 
 **在 Rust、命令行或编辑器中解析、检查和格式化 TOML 1.0 与 1.1。**
 
+https://github.com/user-attachments/assets/1a6e65f9-e0f2-43de-8428-6bea7a4078c6
+
 ## 主要能力
 
 在终端和 CI 中：
