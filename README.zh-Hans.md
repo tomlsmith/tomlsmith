@@ -31,7 +31,7 @@ TomlSmith 通过 TOML 1.0 与 1.1 的全部 1,360 个 `toml-test` 解码用例�
 从 crates.io 安装原生 CLI：
 
 ```bash
-cargo install tomlsmith-cli --version '=0.2.0' --locked
+cargo install tomlsmith-cli --locked
 tomlsmith check Cargo.toml
 tomlsmith fmt Cargo.toml
 tomlsmith fmt --check Cargo.toml

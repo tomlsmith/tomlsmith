@@ -31,7 +31,7 @@ TomlSmith passes all 1,360 `toml-test` decoder cases for TOML 1.0 and 1.1. See [
 Install the native CLI from crates.io:
 
 ```bash
-cargo install tomlsmith-cli --version '=0.2.0' --locked
+cargo install tomlsmith-cli --locked
 tomlsmith check Cargo.toml
 tomlsmith fmt Cargo.toml
 tomlsmith fmt --check Cargo.toml
