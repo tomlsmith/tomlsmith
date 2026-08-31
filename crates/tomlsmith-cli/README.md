@@ -3,7 +3,7 @@
 `tomlsmith-cli` provides the native `tomlsmith` command for checking, formatting, and parsing TOML 1.0 and 1.1 documents.
 
 ```bash
-cargo install tomlsmith-cli --version 0.1.0 --locked
+cargo install tomlsmith-cli --version 0.2.0 --locked
 tomlsmith check Cargo.toml
 tomlsmith fmt --check Cargo.toml
 ```

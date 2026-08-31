@@ -18,11 +18,11 @@ In the terminal and CI:
 
 In editors:
 
-- Diagnostics, formatting, semantic highlighting, hover, document symbols, and folding through LSP.
+- Error and warning diagnostics with stable codes, formatting, structural semantic highlighting, hover, document symbols, and folding through LSP.
 
 In Rust applications:
 
-- Parse once and query diagnostics, formatted output, highlights, and decoded values through the immutable `Document` API.
+- Parse once and query diagnostics, formatted output, highlights, and decoded values through the immutable `Document` API. Source-backed highlights distinguish regular tables, arrays of tables, scalar keys, array-valued keys, and inline-table-valued keys.
 
 TomlSmith passes all 1,360 `toml-test` decoder cases for TOML 1.0 and 1.1. See [TOML conformance](tools/toml-test/README.md) for the scope and command.
 
@@ -31,7 +31,7 @@ TomlSmith passes all 1,360 `toml-test` decoder cases for TOML 1.0 and 1.1. See [
 Install the native CLI from crates.io:
 
 ```bash
-cargo install tomlsmith-cli --version '=0.1.0' --locked
+cargo install tomlsmith-cli --version '=0.2.0' --locked
 tomlsmith check Cargo.toml
 tomlsmith fmt Cargo.toml
 tomlsmith fmt --check Cargo.toml

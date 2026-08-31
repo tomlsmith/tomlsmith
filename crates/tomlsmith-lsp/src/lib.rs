@@ -1396,7 +1396,8 @@ fn token_segments(
 const fn semantic_token_type(kind: HighlightKind) -> u32 {
     match kind {
         HighlightKind::Key => 0,
-        HighlightKind::Table => 1,
+        HighlightKind::ArrayKey | HighlightKind::ArrayTable => 9,
+        HighlightKind::InlineTableKey | HighlightKind::Table => 10,
         HighlightKind::String => 2,
         HighlightKind::Number => 3,
         HighlightKind::Boolean => 4,
@@ -1566,6 +1567,8 @@ fn capabilities() -> ServerCapabilities {
                         SemanticTokenType::OPERATOR,
                         SemanticTokenType::new("tomlDateTime"),
                         SemanticTokenType::new("tomlInvalid"),
+                        SemanticTokenType::new("tomlArrayKey"),
+                        SemanticTokenType::new("tomlTableKey"),
                     ],
                     token_modifiers: Vec::new(),
                 },

@@ -338,6 +338,22 @@ fn initialize_advertises_the_supported_document_features() {
         result["capabilities"]["semanticTokensProvider"]["full"],
         true
     );
+    assert_eq!(
+        result["capabilities"]["semanticTokensProvider"]["legend"]["tokenTypes"],
+        json!([
+            "property",
+            "namespace",
+            "string",
+            "number",
+            "keyword",
+            "comment",
+            "operator",
+            "tomlDateTime",
+            "tomlInvalid",
+            "tomlArrayKey",
+            "tomlTableKey"
+        ])
+    );
 
     client
         .sender
@@ -852,6 +868,74 @@ fn semantic_tokens_are_derived_from_core_highlights_and_encoded_as_utf16() {
                 0, 7, 1, 6, 0,
                 0, 1, 2, 3, 0,
                 0, 3, 4, 5, 0
+            ]
+        })
+    );
+
+    finish_server(client, server_thread);
+}
+
+#[test]
+fn semantic_tokens_distinguish_table_and_collection_shaped_keys() {
+    let (client, server_thread) = initialized_server();
+    let uri = "file:///workspace/structural-highlights.toml";
+    client
+        .sender
+        .send(Message::Notification(Notification {
+            method: "textDocument/didOpen".to_owned(),
+            params: json!({
+                "textDocument": {
+                    "uri": uri,
+                    "languageId": "toml",
+                    "version": 1,
+                    "text": "[workspace]\nscalar=1\narray=[]\ninline={}\n[[bin]]\n"
+                }
+            }),
+        }))
+        .unwrap();
+    let _opened = client
+        .receiver
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap();
+
+    client
+        .sender
+        .send(Message::Request(Request {
+            id: RequestId::from(22),
+            method: "textDocument/semanticTokens/full".to_owned(),
+            params: json!({"textDocument": {"uri": uri}}),
+        }))
+        .unwrap();
+    let Message::Response(response) = client
+        .receiver
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+    else {
+        panic!("semantic tokens must return a response")
+    };
+    assert_eq!(
+        response.response_result.unwrap(),
+        json!({
+            "data": [
+                0, 0, 1, 6, 0,
+                0, 1, 9, 10, 0,
+                0, 9, 1, 6, 0,
+                1, 0, 6, 0, 0,
+                0, 6, 1, 6, 0,
+                0, 1, 1, 3, 0,
+                1, 0, 5, 9, 0,
+                0, 5, 1, 6, 0,
+                0, 1, 1, 6, 0,
+                0, 1, 1, 6, 0,
+                1, 0, 6, 10, 0,
+                0, 6, 1, 6, 0,
+                0, 1, 1, 6, 0,
+                0, 1, 1, 6, 0,
+                1, 0, 1, 6, 0,
+                0, 1, 1, 6, 0,
+                0, 1, 3, 9, 0,
+                0, 3, 1, 6, 0,
+                0, 1, 1, 6, 0
             ]
         })
     );

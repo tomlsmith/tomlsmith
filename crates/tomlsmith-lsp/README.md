@@ -1,6 +1,6 @@
 # tomlsmith-lsp
 
-`tomlsmith-lsp` exposes the TomlSmith language core over the Language Server Protocol. It provides diagnostics, document formatting, semantic tokens, hover information, document symbols, and folding ranges over stdio.
+`tomlsmith-lsp` exposes the TomlSmith language core over the Language Server Protocol. It provides Problems-compatible diagnostics with stable codes, document formatting, structural semantic tokens, hover information, document symbols, and folding ranges over stdio.
 
 ```bash
 tomlsmith-lsp

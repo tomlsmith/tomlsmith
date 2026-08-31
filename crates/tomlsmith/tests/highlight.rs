@@ -1,6 +1,37 @@
 use tomlsmith::{Document, HighlightKind};
 
 #[test]
+fn distinguishes_structural_and_value_shaped_keys() {
+    let source = r#"[workspace]
+name = "TomlSmith"
+members = ["crates/tomlsmith"]
+metadata = { enabled = true }
+
+[[bin]]
+path = "src/main.rs"
+"#;
+    let document = Document::parse(source);
+    let source_backed = document
+        .highlights()
+        .iter()
+        .map(|highlight| {
+            (
+                highlight.kind(),
+                &source[highlight.range().start() as usize..highlight.range().end() as usize],
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert!(source_backed.contains(&(HighlightKind::Table, "workspace")));
+    assert!(source_backed.contains(&(HighlightKind::Key, "name")));
+    assert!(source_backed.contains(&(HighlightKind::ArrayKey, "members")));
+    assert!(source_backed.contains(&(HighlightKind::InlineTableKey, "metadata")));
+    assert!(source_backed.contains(&(HighlightKind::Key, "enabled")));
+    assert!(source_backed.contains(&(HighlightKind::ArrayTable, "bin")));
+    assert!(source_backed.contains(&(HighlightKind::Key, "path")));
+}
+
+#[test]
 fn highlights_are_sorted_non_overlapping_and_source_backed() {
     let source = "title = \"TomlSmith\" # tool\n[package]\nport = 8000\nenabled = true\n";
     let document = Document::parse(source);
@@ -36,19 +67,24 @@ fn highlights_are_sorted_non_overlapping_and_source_backed() {
 }
 
 #[test]
-fn inline_table_keys_are_highlighted_as_keys() {
+fn inline_table_value_keys_are_distinct_from_nested_scalar_keys() {
     let source = "meta = { answer = 42, nested = { enabled = true } }\n";
     let document = Document::parse(source);
-    let highlighted_keys = document
+    let source_backed = document
         .highlights()
         .iter()
-        .filter(|highlight| highlight.kind() == HighlightKind::Key)
         .map(|highlight| {
-            &source[highlight.range().start() as usize..highlight.range().end() as usize]
+            (
+                highlight.kind(),
+                &source[highlight.range().start() as usize..highlight.range().end() as usize],
+            )
         })
         .collect::<Vec<_>>();
 
-    assert_eq!(highlighted_keys, ["meta", "answer", "nested", "enabled"]);
+    assert!(source_backed.contains(&(HighlightKind::InlineTableKey, "meta")));
+    assert!(source_backed.contains(&(HighlightKind::Key, "answer")));
+    assert!(source_backed.contains(&(HighlightKind::InlineTableKey, "nested")));
+    assert!(source_backed.contains(&(HighlightKind::Key, "enabled")));
 }
 
 #[test]
@@ -66,7 +102,7 @@ fn array_table_headers_do_not_leak_into_following_assignments() {
         })
         .collect::<Vec<_>>();
 
-    assert!(source_backed.contains(&(HighlightKind::Table, "products")));
+    assert!(source_backed.contains(&(HighlightKind::ArrayTable, "products")));
     assert!(source_backed.contains(&(HighlightKind::Key, "name")));
     assert!(source_backed.contains(&(HighlightKind::Key, "price")));
     assert!(source_backed.contains(&(HighlightKind::String, "\"Hammer\"")));

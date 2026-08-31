@@ -18,11 +18,11 @@
 
 在编辑器中：
 
-- 通过 LSP 提供诊断、格式化、语义高亮、悬停提示、文档符号和折叠。
+- 通过 LSP 提供带稳定代码的错误与警告诊断、格式化、结构化语义高亮、悬停提示、文档符号和折叠。
 
 在 Rust 应用中：
 
-- 解析一次文档，再通过不可变的 `Document` API 查询诊断、格式化结果、高亮和解码后的值。
+- 解析一次文档，再通过不可变的 `Document` API 查询诊断、格式化结果、高亮和解码后的值。源码区间高亮会区分普通表、表数组、标量值键、数组值键和内联表值键。
 
 TomlSmith 通过 TOML 1.0 与 1.1 的全部 1,360 个 `toml-test` 解码用例。测试范围与命令见 [TOML 一致性测试](tools/toml-test/README.md)。
 
@@ -31,7 +31,7 @@ TomlSmith 通过 TOML 1.0 与 1.1 的全部 1,360 个 `toml-test` 解码用例�
 从 crates.io 安装原生 CLI：
 
 ```bash
-cargo install tomlsmith-cli --version '=0.1.0' --locked
+cargo install tomlsmith-cli --version '=0.2.0' --locked
 tomlsmith check Cargo.toml
 tomlsmith fmt Cargo.toml
 tomlsmith fmt --check Cargo.toml

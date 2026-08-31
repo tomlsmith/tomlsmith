@@ -5,8 +5,14 @@ use crate::{SyntaxKind, TextRange, syntax::lexer::Token};
 pub enum HighlightKind {
     /// A bare or quoted key segment in a key-value declaration.
     Key,
-    /// A key segment in a table or array-of-tables header.
+    /// A bare or quoted key segment whose value is an array.
+    ArrayKey,
+    /// A bare or quoted key segment whose value is an inline table.
+    InlineTableKey,
+    /// A key segment in a table header.
     Table,
+    /// A key segment in an array-of-tables header.
+    ArrayTable,
     /// A string value.
     String,
     /// An integer or floating-point value.
@@ -48,31 +54,39 @@ pub(crate) fn collect(source: &str, tokens: &[Token]) -> Vec<Highlight> {
     let mut highlights = Vec::new();
     let mut in_key = true;
     let mut in_table_header = false;
+    let mut in_array_table_header = false;
     let mut bracket_depth = 0_u32;
     let mut containers = Vec::new();
+    let mut pending_key_highlights = Vec::new();
+    let mut awaiting_value = false;
 
     for token in tokens {
         let raw = &source[token.range.clone()];
+        resolve_pending_key_kind(
+            token.kind,
+            &mut awaiting_value,
+            &mut pending_key_highlights,
+            &mut highlights,
+        );
+
         let kind = match token.kind {
             SyntaxKind::Newline => {
+                pending_key_highlights.clear();
                 if bracket_depth == 0 && containers.is_empty() {
                     in_key = true;
                     in_table_header = false;
+                    in_array_table_header = false;
                 }
                 None
             }
             SyntaxKind::Comment => Some(HighlightKind::Comment),
             SyntaxKind::BasicString | SyntaxKind::LiteralString => Some(if in_key {
-                if in_table_header {
-                    HighlightKind::Table
-                } else {
-                    HighlightKind::Key
-                }
+                key_kind(in_table_header, in_array_table_header)
             } else {
                 HighlightKind::String
             }),
             SyntaxKind::Bare => Some(if in_table_header {
-                HighlightKind::Table
+                key_kind(in_table_header, in_array_table_header)
             } else if in_key {
                 HighlightKind::Key
             } else {
@@ -80,18 +94,17 @@ pub(crate) fn collect(source: &str, tokens: &[Token]) -> Vec<Highlight> {
             }),
             SyntaxKind::Equals => {
                 in_key = false;
+                awaiting_value = true;
                 Some(HighlightKind::Punctuation)
             }
             SyntaxKind::LeftBracket => {
-                let starts_or_extends_table_header = in_key
-                    && containers.is_empty()
-                    && (bracket_depth == 0 || (in_table_header && bracket_depth == 1));
-                if starts_or_extends_table_header {
-                    in_table_header = true;
-                } else {
-                    containers.push(Container::Array);
-                }
-                bracket_depth += 1;
+                open_bracket(
+                    in_key,
+                    &mut in_table_header,
+                    &mut in_array_table_header,
+                    &mut bracket_depth,
+                    &mut containers,
+                );
                 Some(HighlightKind::Punctuation)
             }
             SyntaxKind::RightBracket => {
@@ -115,6 +128,7 @@ pub(crate) fn collect(source: &str, tokens: &[Token]) -> Vec<Highlight> {
             }
             SyntaxKind::Comma => {
                 if containers.last() == Some(&Container::InlineTable) {
+                    pending_key_highlights.clear();
                     in_key = true;
                 }
                 Some(HighlightKind::Punctuation)
@@ -134,14 +148,83 @@ pub(crate) fn collect(source: &str, tokens: &[Token]) -> Vec<Highlight> {
         };
 
         if let Some(kind) = kind {
-            highlights.push(Highlight {
-                kind,
-                range: TextRange::from_usize(token.range.start, token.range.end),
-            });
+            push_highlight(&mut highlights, &mut pending_key_highlights, token, kind);
         }
     }
 
     highlights
+}
+
+fn open_bracket(
+    in_key: bool,
+    in_table_header: &mut bool,
+    in_array_table_header: &mut bool,
+    bracket_depth: &mut u32,
+    containers: &mut Vec<Container>,
+) {
+    let starts_or_extends_table_header = in_key
+        && containers.is_empty()
+        && (*bracket_depth == 0 || (*in_table_header && *bracket_depth == 1));
+    if starts_or_extends_table_header {
+        *in_table_header = true;
+        *in_array_table_header = *bracket_depth == 1;
+    } else {
+        containers.push(Container::Array);
+    }
+    *bracket_depth += 1;
+}
+
+fn push_highlight(
+    highlights: &mut Vec<Highlight>,
+    pending_key_highlights: &mut Vec<usize>,
+    token: &Token,
+    kind: HighlightKind,
+) {
+    let highlight_index = highlights.len();
+    highlights.push(Highlight {
+        kind,
+        range: TextRange::from_usize(token.range.start, token.range.end),
+    });
+    if kind == HighlightKind::Key {
+        pending_key_highlights.push(highlight_index);
+    }
+}
+
+fn resolve_pending_key_kind(
+    token_kind: SyntaxKind,
+    awaiting_value: &mut bool,
+    key_indices: &mut Vec<usize>,
+    highlights: &mut [Highlight],
+) {
+    if !*awaiting_value || token_kind == SyntaxKind::Whitespace {
+        return;
+    }
+    let replacement = match token_kind {
+        SyntaxKind::LeftBracket => Some(HighlightKind::ArrayKey),
+        SyntaxKind::LeftBrace => Some(HighlightKind::InlineTableKey),
+        _ => None,
+    };
+    if let Some(kind) = replacement {
+        reclassify_keys(highlights, key_indices, kind);
+    }
+    key_indices.clear();
+    *awaiting_value = false;
+}
+
+const fn key_kind(in_table_header: bool, in_array_table_header: bool) -> HighlightKind {
+    if !in_table_header {
+        HighlightKind::Key
+    } else if in_array_table_header {
+        HighlightKind::ArrayTable
+    } else {
+        HighlightKind::Table
+    }
+}
+
+fn reclassify_keys(highlights: &mut [Highlight], key_indices: &[usize], kind: HighlightKind) {
+    for &index in key_indices {
+        highlights[index].kind = kind;
+    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]

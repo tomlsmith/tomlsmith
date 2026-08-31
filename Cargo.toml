@@ -9,7 +9,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
@@ -25,7 +25,7 @@ serde_json = "1.0"
 tempfile = "3.27.0"
 text-size = "1.1.1"
 thiserror = "2.0.20"
-tomlsmith = { version = "0.1.0", path = "crates/tomlsmith" }
+tomlsmith = { version = "0.2.0", path = "crates/tomlsmith" }
 ungrammar = "1.16.1"
 
 # Release binaries are latency-sensitive cold-start CLI/LSP entry points:
