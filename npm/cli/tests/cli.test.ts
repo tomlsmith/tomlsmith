@@ -63,6 +63,39 @@ test("the npm executable delegates arguments, standard input, output, and status
   expect(invalid.stderr).toContain("parse.missing-equals");
 });
 
+test("formatting keeps padding inside non-empty inline tables", () => {
+  const source =
+    'dependency={ version = "4\\u002e5", features=["derive"] } # keep\n' +
+    "metadata={ nested={ enabled=true } }\n" +
+    "empty={ }\n" +
+    "multiline={\n value=1,\n}\n";
+  const expected =
+    'dependency = { version = "4\\u002e5", features = ["derive"] } # keep\n' +
+    "metadata = { nested = { enabled = true } }\n" +
+    "empty = {}\n" +
+    "multiline = {\n  value = 1,\n}\n";
+
+  const firstPass = spawnSync(process.execPath, [cliPath, "fmt", "-"], {
+    encoding: "utf8",
+    input: source,
+  });
+
+  expect(firstPass.error).toBeUndefined();
+  expect(firstPass.status).toBe(0);
+  expect(firstPass.stderr).toBe("");
+  expect(firstPass.stdout).toBe(expected);
+
+  const secondPass = spawnSync(process.execPath, [cliPath, "fmt", "-"], {
+    encoding: "utf8",
+    input: firstPass.stdout,
+  });
+
+  expect(secondPass.error).toBeUndefined();
+  expect(secondPass.status).toBe(0);
+  expect(secondPass.stderr).toBe("");
+  expect(secondPass.stdout).toBe(expected);
+});
+
 test("the npm executable reports an omitted platform package without a stack trace", async () => {
   const directory = await mkdtemp(join(tmpdir(), "tomlsmith-npm-cli-"));
   temporaryDirectories.push(directory);

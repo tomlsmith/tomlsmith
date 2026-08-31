@@ -179,6 +179,16 @@ pub(crate) fn build_text(source: &str, options: &FormatOptions) -> String {
             SyntaxKind::LeftBracket | SyntaxKind::LeftBrace => {
                 indent_if_needed(&mut output, &mut line_start, depth, options.indent_width);
                 output.push_str(raw);
+                if token.kind == SyntaxKind::LeftBrace
+                    && !matches!(
+                        next,
+                        None | Some(
+                            SyntaxKind::Newline | SyntaxKind::Comment | SyntaxKind::RightBrace
+                        )
+                    )
+                {
+                    output.push(' ');
+                }
                 delimiters.push(token.kind);
                 depth += 1;
             }
@@ -271,6 +281,9 @@ fn close_delimiter(
         delimiters.pop();
     }
     trim_horizontal(output);
+    if closing == SyntaxKind::RightBrace && !*line_start && !output.ends_with('{') {
+        output.push(' ');
+    }
     indent_if_needed(output, line_start, *depth, indent_width);
     output.push_str(raw);
 }
