@@ -349,9 +349,7 @@ fn initialize_advertises_the_supported_document_features() {
             "comment",
             "operator",
             "tomlDateTime",
-            "tomlInvalid",
-            "tomlArrayKey",
-            "tomlTableKey"
+            "tomlInvalid"
         ])
     );
 
@@ -876,7 +874,7 @@ fn semantic_tokens_are_derived_from_core_highlights_and_encoded_as_utf16() {
 }
 
 #[test]
-fn semantic_tokens_distinguish_table_and_collection_shaped_keys() {
+fn semantic_tokens_distinguish_properties_from_table_namespaces() {
     let (client, server_thread) = initialized_server();
     let uri = "file:///workspace/structural-highlights.toml";
     client
@@ -918,22 +916,22 @@ fn semantic_tokens_distinguish_table_and_collection_shaped_keys() {
         json!({
             "data": [
                 0, 0, 1, 6, 0,
-                0, 1, 9, 10, 0,
+                0, 1, 9, 1, 0,
                 0, 9, 1, 6, 0,
                 1, 0, 6, 0, 0,
                 0, 6, 1, 6, 0,
                 0, 1, 1, 3, 0,
-                1, 0, 5, 9, 0,
+                1, 0, 5, 0, 0,
                 0, 5, 1, 6, 0,
                 0, 1, 1, 6, 0,
                 0, 1, 1, 6, 0,
-                1, 0, 6, 10, 0,
+                1, 0, 6, 0, 0,
                 0, 6, 1, 6, 0,
                 0, 1, 1, 6, 0,
                 0, 1, 1, 6, 0,
                 1, 0, 1, 6, 0,
                 0, 1, 1, 6, 0,
-                0, 1, 3, 9, 0,
+                0, 1, 3, 1, 0,
                 0, 3, 1, 6, 0,
                 0, 1, 1, 6, 0
             ]
