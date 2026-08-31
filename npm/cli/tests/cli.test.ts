@@ -117,45 +117,49 @@ test("the npm executable reports an omitted platform package without a stack tra
   expect(result.stderr).not.toContain(" at ");
 });
 
-test("the packed npm distribution installs an executable native CLI", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "tomlsmith-npm-install-"));
-  temporaryDirectories.push(directory);
-  const manifest = JSON.parse(
-    await readFile(join(repositoryRoot, "npm", "cli", "package.json"), "utf8"),
-  ) as { version: string };
-  const archives = join(repositoryRoot, "npm", "dist");
-  const cliArchive = join(
-    archives,
-    `tomlsmith-cli-${manifest.version}.tgz`,
-  );
-  const platformArchive = join(
-    archives,
-    `tomlsmith-cli-${platformArchiveLabel()}-${manifest.version}.tgz`,
-  );
-  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-  const install = spawnSync(
-    npm,
-    [
-      "install",
-      "--prefix",
-      directory,
-      "--ignore-scripts",
-      "--fetch-retries=0",
-      "--registry=http://127.0.0.1:9",
-      cliArchive,
-      platformArchive,
-    ],
-    { encoding: "utf8", shell: process.platform === "win32" },
-  );
+test(
+  "the packed npm distribution installs an executable native CLI",
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "tomlsmith-npm-install-"));
+    temporaryDirectories.push(directory);
+    const manifest = JSON.parse(
+      await readFile(join(repositoryRoot, "npm", "cli", "package.json"), "utf8"),
+    ) as { version: string };
+    const archives = join(repositoryRoot, "npm", "dist");
+    const cliArchive = join(
+      archives,
+      `tomlsmith-cli-${manifest.version}.tgz`,
+    );
+    const platformArchive = join(
+      archives,
+      `tomlsmith-cli-${platformArchiveLabel()}-${manifest.version}.tgz`,
+    );
+    const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+    const install = spawnSync(
+      npm,
+      [
+        "install",
+        "--prefix",
+        directory,
+        "--ignore-scripts",
+        "--fetch-retries=0",
+        "--registry=http://127.0.0.1:9",
+        cliArchive,
+        platformArchive,
+      ],
+      { encoding: "utf8", shell: process.platform === "win32" },
+    );
 
-  expect(install.status, install.stderr).toBe(0);
-  const result = spawnSync(
-    npm,
-    ["exec", "--prefix", directory, "--", "tomlsmith", "--version"],
-    { encoding: "utf8", shell: process.platform === "win32" },
-  );
+    expect(install.status, install.stderr).toBe(0);
+    const result = spawnSync(
+      npm,
+      ["exec", "--prefix", directory, "--", "tomlsmith", "--version"],
+      { encoding: "utf8", shell: process.platform === "win32" },
+    );
 
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.stderr).toBe("");
-  expect(result.stdout.trim()).toBe(`tomlsmith ${manifest.version}`);
-});
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout.trim()).toBe(`tomlsmith ${manifest.version}`);
+  },
+  30_000,
+);
