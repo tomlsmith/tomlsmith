@@ -63,7 +63,7 @@ test("the npm executable delegates arguments, standard input, output, and status
   expect(invalid.stderr).toContain("parse.missing-equals");
 });
 
-test("formatting keeps padding inside non-empty inline tables", () => {
+test("formatting normalizes inline-table layout and keeps non-empty padding", () => {
   const source =
     'dependency={ version = "4\\u002e5", features=["derive"] } # keep\n' +
     "metadata={ nested={ enabled=true } }\n" +
@@ -73,7 +73,7 @@ test("formatting keeps padding inside non-empty inline tables", () => {
     'dependency = { version = "4\\u002e5", features = ["derive"] } # keep\n' +
     "metadata = { nested = { enabled = true } }\n" +
     "empty = {}\n" +
-    "multiline = {\n  value = 1,\n}\n";
+    "multiline = { value = 1, }\n";
 
   const firstPass = spawnSync(process.execPath, [cliPath, "fmt", "-"], {
     encoding: "utf8",

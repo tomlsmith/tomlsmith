@@ -30,19 +30,19 @@ importers:
   npm/cli:
     optionalDependencies:
       '@tomlsmith/cli-darwin-arm64':
-        specifier: workspace:0.3.0
+        specifier: workspace:0.3.1
         version: link:../platforms/darwin-arm64
       '@tomlsmith/cli-darwin-x64':
-        specifier: workspace:0.3.0
+        specifier: workspace:0.3.1
         version: link:../platforms/darwin-x64
       '@tomlsmith/cli-linux-arm64':
-        specifier: workspace:0.3.0
+        specifier: workspace:0.3.1
         version: link:../platforms/linux-arm64
       '@tomlsmith/cli-linux-x64':
-        specifier: workspace:0.3.0
+        specifier: workspace:0.3.1
         version: link:../platforms/linux-x64
       '@tomlsmith/cli-win32-x64':
-        specifier: workspace:0.3.0
+        specifier: workspace:0.3.1
         version: link:../platforms/win32-x64
 
   npm/platforms/darwin-arm64: {}

@@ -1,6 +1,6 @@
 {
   "name": "@tomlsmith/cli",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "The TomlSmith TOML formatter and checker",
   "type": "module",
   "bin": {
@@ -32,10 +32,10 @@
     "provenance": true
   },
   "optionalDependencies": {
-    "@tomlsmith/cli-darwin-arm64": "workspace:0.3.0",
-    "@tomlsmith/cli-darwin-x64": "workspace:0.3.0",
-    "@tomlsmith/cli-linux-arm64": "workspace:0.3.0",
-    "@tomlsmith/cli-linux-x64": "workspace:0.3.0",
-    "@tomlsmith/cli-win32-x64": "workspace:0.3.0"
+    "@tomlsmith/cli-darwin-arm64": "workspace:0.3.1",
+    "@tomlsmith/cli-darwin-x64": "workspace:0.3.1",
+    "@tomlsmith/cli-linux-arm64": "workspace:0.3.1",
+    "@tomlsmith/cli-linux-x64": "workspace:0.3.1",
+    "@tomlsmith/cli-win32-x64": "workspace:0.3.1"
   }
 }
