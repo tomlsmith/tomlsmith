@@ -620,6 +620,19 @@ fn formatting_edits(client: &Connection, id: i32, uri: &str) -> Vec<Value> {
 }
 
 #[test]
+fn formatting_normalizes_inline_tables_and_contiguous_blank_lines() {
+    let (client, server_thread) = init(&json!({}), &json!({"tomlVersion": "1.1"}));
+    let uri = "file:///workspace/inline-table-layout.toml";
+    let text = "[workspace.dependencies]\nclap = {\n\n\n  version = \"4.5\", features = [\"derive\"] }\nlsp-server = \"0.10\"\n\n\nlsp-types = \"0.97\"\n";
+    let expected = "[workspace.dependencies]\nclap = { version = \"4.5\", features = [\"derive\"] }\nlsp-server = \"0.10\"\nlsp-types = \"0.97\"\n";
+    let _published = open(&client, uri, text);
+
+    let edits = formatting_edits(&client, 499, uri);
+    assert_eq!(apply_edits(text, &edits), expected);
+    finish(client, server_thread);
+}
+
+#[test]
 fn a_single_misformatted_middle_line_yields_one_line_scoped_edit() {
     let (client, server_thread) = init(&json!({}), &json!({"tomlVersion": "1.0"}));
     let uri = "file:///workspace/minimal-middle.toml";
@@ -656,10 +669,11 @@ fn interleaved_indent_fixes_produce_scattered_edits_not_one_replacement() {
         let head = format!(
             "[[package]]\nname = \"package-{stanza}\"\nversion = \"1.0.{stanza}\"\ndependencies = [\n"
         );
+        let separator = if stanza == 79 { "\n" } else { "\n\n" };
         text.push_str(&head);
         expected.push_str(&head);
-        write!(text, " \"dep-{stanza}\",\n]\n\n").unwrap();
-        write!(expected, "  \"dep-{stanza}\",\n]\n\n").unwrap();
+        write!(text, " \"dep-{stanza}\",\n]{separator}").unwrap();
+        write!(expected, "  \"dep-{stanza}\",\n]{separator}").unwrap();
     }
     let _published = open(&client, uri, &text);
 
@@ -727,6 +741,33 @@ fn a_changed_final_line_without_trailing_newline_stays_line_scoped() {
 // ---------------------------------------------------------------------------
 // Folding hierarchy regression probes
 // ---------------------------------------------------------------------------
+
+#[test]
+fn table_fold_stops_at_its_last_key_before_a_detached_comment_block() {
+    let (client, server_thread) = init(&json!({}), &json!({}));
+    let uri = "file:///workspace/fold-comments.toml";
+    let text = "[workspace.dependencies]\nclap = \"4.5\"\n\n# Release binaries are latency-sensitive.\n[profile.release]\nlto = \"fat\"\n";
+    let _published = open(&client, uri, text);
+    let response = request(
+        &client,
+        399,
+        "textDocument/foldingRange",
+        json!({"textDocument": {"uri": uri}}),
+    );
+    let folds = response.response_result.unwrap();
+    let workspace_dependencies = folds
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|fold| fold["startLine"] == 0)
+        .expect("fold for [workspace.dependencies]");
+
+    assert_eq!(
+        workspace_dependencies["endLine"], 1,
+        "a table fold must not include a detached comment block"
+    );
+    finish(client, server_thread);
+}
 
 #[test]
 fn parent_fold_stops_at_reopened_duplicate_and_out_of_order_tables() {

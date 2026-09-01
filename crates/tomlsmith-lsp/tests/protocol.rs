@@ -1305,7 +1305,7 @@ fn folding_ranges_follow_core_table_declarations() {
     assert_eq!(
         response.response_result.unwrap(),
         json!([
-            {"startLine": 0, "endLine": 3, "kind": "region"},
+            {"startLine": 0, "endLine": 2, "kind": "region"},
             {"startLine": 4, "endLine": 5, "kind": "region"}
         ])
     );
@@ -1338,13 +1338,13 @@ fn folding_a_parent_table_spans_its_subtables() {
     else {
         panic!("foldingRange must return a response")
     };
-    // [servers] must fold over [servers.limits] and stop before [other];
-    // the subtable and the sibling keep their own ranges.
+    // [servers] must fold over [servers.limits] and stop at its last key;
+    // the subtable and the sibling keep their own declaration-bounded ranges.
     assert_eq!(
         response.response_result.unwrap(),
         json!([
-            {"startLine": 0, "endLine": 5, "kind": "region"},
-            {"startLine": 3, "endLine": 5, "kind": "region"},
+            {"startLine": 0, "endLine": 4, "kind": "region"},
+            {"startLine": 3, "endLine": 4, "kind": "region"},
             {"startLine": 6, "endLine": 7, "kind": "region"}
         ])
     );

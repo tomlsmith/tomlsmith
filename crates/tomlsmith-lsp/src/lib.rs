@@ -955,45 +955,25 @@ fn merge_touching_edits(edits: Vec<LineDiffEdit>) -> Vec<LineDiffEdit> {
 }
 
 fn folding_ranges(document: &Document, index: &LineIndex) -> Vec<FoldingRange> {
-    let tables = document
-        .semantics()
-        .declarations()
+    let declarations = document.semantics().declarations();
+    let paths = declarations
         .iter()
-        .filter(|declaration| {
+        .map(|declaration| declaration.key().segments().collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    let mut ranges = declarations
+        .iter()
+        .enumerate()
+        .filter(|(_, declaration)| {
             matches!(
                 declaration.kind(),
                 DeclarationKind::Table | DeclarationKind::ArrayTable
             )
         })
-        .map(|declaration| {
-            (
-                declaration.key().segments().collect::<Vec<_>>(),
-                declaration,
-            )
-        })
-        .collect::<Vec<_>>();
-    let content_end = document.text().trim_end_matches(['\r', '\n']).len();
-    let last_content_line =
-        byte_to_position(document.text(), index, saturating_u32(content_end)).line;
-
-    let mut ranges = tables
-        .iter()
-        .enumerate()
-        .filter_map(|(table_index, (segments, declaration))| {
+        .filter_map(|(table_index, declaration)| {
             let start_line =
                 byte_to_position(document.text(), index, declaration.range().start()).line;
-            // A table's fold covers its whole hierarchical extent: it ends
-            // at the next table that is not a descendant, so folding
-            // `[servers]` also hides `[servers.limits]` while a sibling
-            // header still terminates the fold.
-            let end_line = tables[table_index + 1..]
-                .iter()
-                .find(|(next_segments, _)| !is_proper_prefix(segments, next_segments))
-                .map_or(last_content_line, |(_, next)| {
-                    byte_to_position(document.text(), index, next.range().start())
-                        .line
-                        .saturating_sub(1)
-                });
+            let end = table_extent_end(declarations, &paths, table_index);
+            let end_line = byte_to_position(document.text(), index, end).line;
             (end_line > start_line).then_some(FoldingRange {
                 start_line,
                 start_character: None,
@@ -1014,6 +994,30 @@ fn folding_ranges(document: &Document, index: &LineIndex) -> Vec<FoldingRange> {
         )
     });
     ranges
+}
+
+/// Finds the last declaration owned by a table hierarchy without absorbing
+/// trivia before the next sibling header.
+fn table_extent_end(declarations: &[Declaration], paths: &[Vec<&str>], table_index: usize) -> u32 {
+    let table_segments = &paths[table_index];
+    let mut end = declarations[table_index].range().end();
+    for (declaration, segments) in declarations[table_index + 1..]
+        .iter()
+        .zip(&paths[table_index + 1..])
+    {
+        let descendant = is_proper_prefix(table_segments, segments);
+        if matches!(
+            declaration.kind(),
+            DeclarationKind::Table | DeclarationKind::ArrayTable
+        ) && !descendant
+        {
+            break;
+        }
+        if descendant {
+            end = end.max(declaration.range().end());
+        }
+    }
+    end
 }
 
 fn collect_collection_folding_ranges(

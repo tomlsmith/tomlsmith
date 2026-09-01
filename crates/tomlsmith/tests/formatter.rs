@@ -24,17 +24,149 @@ fn formatting_is_idempotent_and_preserves_literal_spelling() {
 }
 
 #[test]
-fn formatting_collapses_excess_blank_lines_to_one() {
+fn formatting_removes_blank_lines_between_contiguous_table_items() {
     let source = "[workspace.dependencies]\n\n\nclap={version=\"4.5\",features=[\"derive\"]}\nlsp-server=\"0.10\"\n\n\n\nlsp-types=\"0.97\"\n\n# Release binaries\n";
-    let expected = "[workspace.dependencies]\n\nclap = { version = \"4.5\", features = [\"derive\"] }\nlsp-server = \"0.10\"\n\nlsp-types = \"0.97\"\n\n# Release binaries\n";
+    let expected = "[workspace.dependencies]\nclap = { version = \"4.5\", features = [\"derive\"] }\nlsp-server = \"0.10\"\nlsp-types = \"0.97\"\n\n# Release binaries\n";
 
     let FormatOutcome::Changed { text, .. } = Document::parse(source).format() else {
-        panic!("excess blank lines should be collapsed");
+        panic!("blank lines between contiguous table items should be removed");
     };
 
     assert_eq!(text.as_ref(), expected);
     assert!(matches!(
         Document::parse(text).format(),
+        FormatOutcome::Unchanged
+    ));
+}
+
+#[test]
+fn formatting_flattens_short_multiline_inline_tables() {
+    let source = "clap = {\n\n\n  version = \"4.5\", features = [\n    \"derive\"\n  ]\n}\n";
+    let expected = "clap = { version = \"4.5\", features = [\"derive\"] }\n";
+
+    let FormatOutcome::Changed { text, .. } = Document::parse(source).format() else {
+        panic!("a short comment-free inline table should be flattened");
+    };
+
+    assert_eq!(text.as_ref(), expected);
+    assert!(matches!(
+        Document::parse(text).format(),
+        FormatOutcome::Unchanged
+    ));
+}
+
+#[test]
+fn line_width_expands_inline_tables_consistently() {
+    let source = "package = {\n  version=\"4.5\", features=[\"derive\"] }\n";
+    let expected = "package = {\n  version = \"4.5\",\n  features = [\"derive\"]\n}\n";
+    let options = FormatOptions {
+        line_width: 32,
+        ..FormatOptions::default()
+    };
+
+    let FormatOutcome::Changed { text, .. } = Document::parse(source).format_with(&options) else {
+        panic!("an inline table that does not fit should be fully expanded");
+    };
+
+    assert_eq!(text.as_ref(), expected);
+    assert!(matches!(
+        Document::parse(text).format_with(&options),
+        FormatOutcome::Unchanged
+    ));
+}
+
+#[test]
+fn line_width_expands_single_line_inline_tables() {
+    let source = "package={version=\"4.5\",features=[\"derive\"]}\n";
+    let expected = "package = {\n  version = \"4.5\",\n  features = [\"derive\"]\n}\n";
+    let options = FormatOptions {
+        line_width: 32,
+        ..FormatOptions::default()
+    };
+
+    let FormatOutcome::Changed { text, .. } = Document::parse(source).format_with(&options) else {
+        panic!("a long single-line inline table should be expanded");
+    };
+
+    assert_eq!(text.as_ref(), expected);
+    assert!(matches!(
+        Document::parse(text).format_with(&options),
+        FormatOutcome::Unchanged
+    ));
+}
+
+#[test]
+fn line_width_keeps_toml_1_0_inline_tables_single_line() {
+    let source = "package={version=\"4.5\",features=[\"derive\"]}\n";
+    let expected = "package = { version = \"4.5\", features = [\"derive\"] }\n";
+    let options = FormatOptions {
+        target_version: TomlVersion::V1_0,
+        line_width: 32,
+        ..FormatOptions::default()
+    };
+
+    let FormatOutcome::Changed { text, .. } =
+        Document::parse_as(source, TomlVersion::V1_0).format_with(&options)
+    else {
+        panic!("TOML 1.0 inline tables should still have canonical spacing");
+    };
+
+    assert_eq!(text.as_ref(), expected);
+    assert!(matches!(
+        Document::parse_as(text, TomlVersion::V1_0).format_with(&options),
+        FormatOutcome::Unchanged
+    ));
+}
+
+#[test]
+fn formatting_keeps_commented_inline_tables_fully_multiline() {
+    let source = "package = {\n  # Keep this note.\n  version=\"4.5\", features=[\"derive\"] }\n";
+    let expected =
+        "package = {\n  # Keep this note.\n  version = \"4.5\",\n  features = [\"derive\"]\n}\n";
+
+    let FormatOutcome::Changed { text, .. } = Document::parse(source).format() else {
+        panic!("a commented inline table should be fully expanded");
+    };
+
+    assert_eq!(text.as_ref(), expected);
+    assert!(matches!(
+        Document::parse(text).format(),
+        FormatOutcome::Unchanged
+    ));
+}
+
+#[test]
+fn formatting_expands_inline_tables_with_multiline_strings() {
+    let source = "package = { text = \"\"\"alpha\nbeta\"\"\", other=1 }\n";
+    let expected = "package = {\n  text = \"\"\"alpha\nbeta\"\"\",\n  other = 1\n}\n";
+
+    let FormatOutcome::Changed { text, .. } = Document::parse(source).format() else {
+        panic!("an inline table containing a multiline string should be fully expanded");
+    };
+
+    assert_eq!(text.as_ref(), expected);
+    assert!(matches!(
+        Document::parse(text).format(),
+        FormatOutcome::Unchanged
+    ));
+}
+
+#[test]
+fn formatting_normalizes_nested_inline_tables_in_one_pass() {
+    let source = "root={nested={alpha=\"11111\",beta=\"22222\"},tail=1}\n";
+    let expected = "root = {\n  nested = {\n    alpha = \"11111\",\n    beta = \"22222\"\n  },\n  tail = 1\n}\n";
+    let options = FormatOptions {
+        line_width: 40,
+        ..FormatOptions::default()
+    };
+
+    let FormatOutcome::Changed { text, .. } = Document::parse(source).format_with(&options) else {
+        panic!("nested inline tables should reach their canonical layout in one format call");
+    };
+
+    assert_eq!(text.as_ref(), expected);
+    assert!(matches!(
+        Document::parse(text).format_with(&options),
         FormatOutcome::Unchanged
     ));
 }

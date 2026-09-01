@@ -80,7 +80,7 @@ enum Command {
         #[arg(long, value_parser = clap::value_parser!(u8).range(1..))]
         indent_width: Option<u8>,
 
-        /// Line width that triggers wrapping inside arrays.
+        /// Line width that triggers wrapping inside arrays and TOML 1.1 inline tables.
         #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
         line_width: Option<u16>,
 

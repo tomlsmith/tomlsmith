@@ -120,6 +120,25 @@ pub(crate) fn finish_prebuilt(
 /// The purely lexical formatting pass: produces the formatted text for
 /// `source` without consulting any parse result.
 pub(crate) fn build_text(source: &str, options: &FormatOptions) -> String {
+    let mut output = build_lexical_text(source, options);
+    if !output.contains('{') {
+        return output;
+    }
+    let pass_limit = output.bytes().filter(|byte| *byte == b'{').count();
+    for _ in 0..pass_limit {
+        let Some(normalized) = normalize_inline_table_layout(&output, options) else {
+            break;
+        };
+        let next = build_lexical_text(&normalized, options);
+        if next == output {
+            break;
+        }
+        output = next;
+    }
+    output
+}
+
+fn build_lexical_text(source: &str, options: &FormatOptions) -> String {
     let lexed = lexer::lex(source);
     let newline = selected_newline(source, options.line_ending);
     let mut output = String::with_capacity(source.len());
@@ -151,7 +170,12 @@ pub(crate) fn build_text(source: &str, options: &FormatOptions) -> String {
                 if previous != Some(SyntaxKind::Comment) {
                     trim_horizontal(&mut output);
                 }
-                if consecutive_newlines < 2 {
+                let newline_limit = if preserves_blank_line(&lexed.tokens, index, depth) {
+                    2
+                } else {
+                    1
+                };
+                if consecutive_newlines < newline_limit {
                     output.push_str(newline);
                 }
                 consecutive_newlines = consecutive_newlines.saturating_add(1);
@@ -219,6 +243,212 @@ pub(crate) fn build_text(source: &str, options: &FormatOptions) -> String {
     }
 
     output
+}
+
+fn normalize_inline_table_layout(source: &str, options: &FormatOptions) -> Option<String> {
+    if options.target_version == TomlVersion::V1_0 {
+        return None;
+    }
+    let lexed = lexer::lex(source);
+    let mut replacements = Vec::new();
+    for (opening, closing) in inline_table_pairs(&lexed.tokens) {
+        let tokens = &lexed.tokens[opening..=closing];
+        let has_newline = tokens.iter().any(|token| token.kind == SyntaxKind::Newline);
+        let has_comment = tokens.iter().any(|token| token.kind == SyntaxKind::Comment);
+        let has_multiline_string = tokens.iter().any(|token| {
+            matches!(
+                token.kind,
+                SyntaxKind::BasicString | SyntaxKind::LiteralString
+            ) && source[token.range.clone()].contains(['\n', '\r'])
+        });
+        let start = lexed.tokens[opening].range.start;
+        let end = lexed.tokens[closing].range.end;
+        let base_indent = " ".repeat(
+            delimiter_depth_before(&lexed.tokens, opening) * usize::from(options.indent_width),
+        );
+        if replacements
+            .iter()
+            .any(|(selected_start, selected_end, _)| start < *selected_end && *selected_start < end)
+        {
+            continue;
+        }
+        if has_multiline_string {
+            let replacement = expand_inline_table(
+                &source[start..end],
+                selected_newline(source, options.line_ending),
+                &base_indent,
+                options.indent_width,
+            );
+            if replacement != source[start..end] {
+                replacements.push((start, end, replacement));
+            }
+            continue;
+        }
+        if has_comment {
+            if !has_newline {
+                continue;
+            }
+            let replacement = expand_inline_table(
+                &source[start..end],
+                selected_newline(source, options.line_ending),
+                &base_indent,
+                options.indent_width,
+            );
+            if replacement != source[start..end] {
+                replacements.push((start, end, replacement));
+            }
+            continue;
+        }
+        if !has_newline && current_line_width(&source[..end]) <= usize::from(options.line_width) {
+            continue;
+        }
+
+        let mut flat_source = String::with_capacity(end - start);
+        for token in tokens {
+            if matches!(token.kind, SyntaxKind::Whitespace | SyntaxKind::Newline) {
+                if !flat_source.ends_with(' ') {
+                    flat_source.push(' ');
+                }
+            } else {
+                flat_source.push_str(&source[token.range.clone()]);
+            }
+        }
+        let mut flat_options = options.clone();
+        flat_options.line_width = u16::MAX;
+        let candidate = build_lexical_text(&flat_source, &flat_options);
+        let projected_width = current_line_width(&source[..start]) + candidate.chars().count();
+        if !candidate.contains(['\n', '\r']) {
+            let replacement = if projected_width <= usize::from(options.line_width) {
+                candidate
+            } else {
+                expand_inline_table(
+                    &source[start..end],
+                    selected_newline(source, options.line_ending),
+                    &base_indent,
+                    options.indent_width,
+                )
+            };
+            if replacement != source[start..end] {
+                replacements.push((start, end, replacement));
+            }
+        }
+    }
+
+    if replacements.is_empty() {
+        return None;
+    }
+    replacements.sort_by_key(|(start, _, _)| *start);
+    let mut output = source.to_owned();
+    for (start, end, replacement) in replacements.into_iter().rev() {
+        output.replace_range(start..end, &replacement);
+    }
+    Some(output)
+}
+
+fn inline_table_pairs(tokens: &[lexer::Token]) -> Vec<(usize, usize)> {
+    let mut openings = Vec::new();
+    let mut pairs = Vec::new();
+    for (index, token) in tokens.iter().enumerate() {
+        match token.kind {
+            SyntaxKind::LeftBrace => openings.push(index),
+            SyntaxKind::RightBrace => {
+                if let Some(opening) = openings.pop() {
+                    pairs.push((opening, index));
+                }
+            }
+            _ => {}
+        }
+    }
+    pairs.sort_by(|left, right| {
+        left.1
+            .saturating_sub(left.0)
+            .cmp(&right.1.saturating_sub(right.0))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    pairs
+}
+
+fn expand_inline_table(source: &str, newline: &str, base_indent: &str, indent_width: u8) -> String {
+    let lexed = lexer::lex(source);
+    let mut output = String::with_capacity(source.len());
+    let mut item_indent = base_indent.to_owned();
+    item_indent.extend(std::iter::repeat_n(' ', usize::from(indent_width)));
+    let mut brace_depth = 0_usize;
+    let mut bracket_depth = 0_usize;
+    let mut skip_outer_layout = false;
+    for (index, token) in lexed.tokens.iter().enumerate() {
+        let raw = &source[token.range.clone()];
+        if skip_outer_layout && matches!(token.kind, SyntaxKind::Whitespace | SyntaxKind::Newline) {
+            continue;
+        }
+        if !matches!(token.kind, SyntaxKind::Whitespace | SyntaxKind::Newline) {
+            skip_outer_layout = false;
+        }
+        match token.kind {
+            SyntaxKind::LeftBrace => {
+                brace_depth += 1;
+                output.push_str(raw);
+                if brace_depth == 1 {
+                    output.push_str(newline);
+                    output.push_str(&item_indent);
+                    skip_outer_layout = true;
+                }
+            }
+            SyntaxKind::RightBrace => {
+                if brace_depth == 1 {
+                    trim_horizontal(&mut output);
+                    if !output.ends_with(['\n', '\r']) {
+                        output.push_str(newline);
+                    }
+                    output.push_str(base_indent);
+                }
+                output.push_str(raw);
+                brace_depth = brace_depth.saturating_sub(1);
+            }
+            SyntaxKind::LeftBracket => {
+                bracket_depth += 1;
+                output.push_str(raw);
+            }
+            SyntaxKind::RightBracket => {
+                bracket_depth = bracket_depth.saturating_sub(1);
+                output.push_str(raw);
+            }
+            SyntaxKind::Comma if brace_depth == 1 && bracket_depth == 0 => {
+                trim_horizontal(&mut output);
+                output.push(',');
+                if significant_after(&lexed.tokens, index) != Some(SyntaxKind::Comment) {
+                    output.push_str(newline);
+                    output.push_str(&item_indent);
+                    skip_outer_layout = true;
+                }
+            }
+            SyntaxKind::Newline => {
+                trim_horizontal(&mut output);
+                if !output.ends_with('\n') {
+                    output.push_str(newline);
+                }
+                if brace_depth == 1
+                    && bracket_depth == 0
+                    && content_after(&lexed.tokens, index) != Some(SyntaxKind::RightBrace)
+                {
+                    output.push_str(&item_indent);
+                    skip_outer_layout = true;
+                }
+            }
+            _ => output.push_str(raw),
+        }
+    }
+    output
+}
+
+fn delimiter_depth_before(tokens: &[lexer::Token], index: usize) -> usize {
+    tokens[..index]
+        .iter()
+        .fold(0_usize, |depth, token| match token.kind {
+            SyntaxKind::LeftBracket | SyntaxKind::LeftBrace => depth + 1,
+            SyntaxKind::RightBracket | SyntaxKind::RightBrace => depth.saturating_sub(1),
+            _ => depth,
+        })
 }
 
 fn unsafe_diagnostics(document: &Document, target_version: TomlVersion) -> Vec<Diagnostic> {
@@ -327,6 +557,39 @@ fn significant_after(tokens: &[lexer::Token], index: usize) -> Option<SyntaxKind
     tokens[index + 1..]
         .iter()
         .find(|token| !matches!(token.kind, SyntaxKind::Bom | SyntaxKind::Whitespace))
+        .map(|token| token.kind)
+}
+
+fn preserves_blank_line(tokens: &[lexer::Token], index: usize, depth: usize) -> bool {
+    let previous = content_before(tokens, index);
+    let next = content_after(tokens, index);
+    previous == Some(SyntaxKind::Comment)
+        || next == Some(SyntaxKind::Comment)
+        || (depth == 0 && next == Some(SyntaxKind::LeftBracket))
+}
+
+fn content_before(tokens: &[lexer::Token], index: usize) -> Option<SyntaxKind> {
+    tokens[..index]
+        .iter()
+        .rev()
+        .find(|token| {
+            !matches!(
+                token.kind,
+                SyntaxKind::Bom | SyntaxKind::Whitespace | SyntaxKind::Newline
+            )
+        })
+        .map(|token| token.kind)
+}
+
+fn content_after(tokens: &[lexer::Token], index: usize) -> Option<SyntaxKind> {
+    tokens[index + 1..]
+        .iter()
+        .find(|token| {
+            !matches!(
+                token.kind,
+                SyntaxKind::Bom | SyntaxKind::Whitespace | SyntaxKind::Newline
+            )
+        })
         .map(|token| token.kind)
 }
 
