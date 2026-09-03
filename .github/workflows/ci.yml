@@ -294,8 +294,9 @@ jobs:
         # the one head-versus-comparison delta that blocks at a tight budget.
         run: |
           set -euo pipefail
+          # npm:performance staged the head release CLI into the platform package.
           tools/performance/callgrind-compare.sh \
-            "$(node -e 'console.log(require.resolve("@tomlsmith/cli-linux-x64/bin/tomlsmith"))')" \
+            npm/platforms/linux-x64/bin/tomlsmith \
             "$TOMLSMITH_BASELINE_BIN" \
             target/performance/instructions.md 2>&1 | tee target/performance/callgrind.log
 

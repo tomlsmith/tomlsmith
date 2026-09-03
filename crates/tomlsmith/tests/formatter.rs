@@ -275,10 +275,14 @@ fn arrays_inside_expanded_inline_tables_wrap_at_their_real_columns() {
 
 /// Runs `body` on a thread with a deliberately small stack so that any
 /// recursion over token-level nesting overflows deterministically on every
-/// platform instead of depending on the host's default stack size.
+/// platform instead of depending on the host's default stack size. The
+/// parser's own recursion is bounded by its 256-level collection limit and
+/// needs about a megabyte in unoptimized builds on Windows, so the budget is
+/// a few megabytes: far below what a per-level recursion over the refused
+/// 20 000-level input would take.
 fn on_small_stack(body: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new()
-        .stack_size(512 * 1024)
+        .stack_size(4 * 1024 * 1024)
         .spawn(body)
         .expect("spawn a small-stack test thread")
         .join()
