@@ -1,0 +1,4 @@
+a.b.c = 1
+[table.sub]
+[[arr.items]]
+"quoted . key".bare = 2

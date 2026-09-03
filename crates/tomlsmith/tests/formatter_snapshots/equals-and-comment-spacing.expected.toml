@@ -1,0 +1,3 @@
+title = "keep\u0041" #comment
+numbers = [1, 2, 3]
+value = 1 # keep trailing comment spaces   

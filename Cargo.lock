@@ -617,6 +617,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "tomlsmith-complexity-guards"
+version = "0.3.1"
+dependencies = [
+ "tomlsmith",
+]
+
+[[package]]
 name = "tomlsmith-lsp"
 version = "0.3.1"
 dependencies = [

@@ -1,0 +1,10 @@
+nested = {
+  first = 1 # c
+  , second = 2
+}
+lone = {
+  b = 1
+  ,
+  c = 2
+  ,
+}

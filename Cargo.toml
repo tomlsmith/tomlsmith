@@ -3,6 +3,7 @@ members = [
     "crates/tomlsmith",
     "crates/tomlsmith-cli",
     "crates/tomlsmith-lsp",
+    "tools/complexity-guards",
     "tools/toml-test/decoder",
     "xtask",
 ]

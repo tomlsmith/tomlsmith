@@ -1,0 +1,24 @@
+[package]
+name = "tomlsmith-complexity-guards"
+description = "Allocation-counting complexity and memory guards for the TomlSmith core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+tomlsmith.workspace = true
+
+# The counting allocator is the one place in the workspace that needs an
+# `unsafe impl GlobalAlloc`, so this crate does not inherit the workspace's
+# `unsafe_code = "forbid"`; every other workspace lint is kept.
+[lints.rust]
+missing_debug_implementations = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

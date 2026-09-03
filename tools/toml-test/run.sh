@@ -25,6 +25,11 @@ if [[ "$module_sum" != "$TOML_TEST_MODULE_SUM" ]]; then
   printf 'unexpected %s module sum: %s\n' "$TOML_TEST_VERSION" "$module_sum" >&2
   exit 2
 fi
+module_dir=$(sed -n 's/^[[:space:]]*"Dir": "\([^"]*\)",$/\1/p' <<<"$module_metadata")
+if [[ ! -d "$module_dir/tests/valid" || ! -d "$module_dir/tests/invalid" ]]; then
+  printf 'the %s module download did not expose a tests directory: %s\n' "$TOML_TEST_VERSION" "$module_dir" >&2
+  exit 2
+fi
 GOBIN="$report_root/bin" go install "$TOML_TEST_MODULE/cmd/toml-test@$TOML_TEST_VERSION"
 
 (
@@ -65,4 +70,13 @@ run_version "1.1" || run_exit_code=1
 "$cargo_target/debug/tomlsmith-test-report" \
   "$report_root/reports/toml-1.0.json" \
   "$report_root/reports/toml-1.1.json" || run_exit_code=1
+
+# The same pinned corpus also proves whole-corpus formatter invariants
+# (guarded refusal, idempotence, and semantic preservation) in both versions.
+printf 'running formatter corpus invariants over %s\n' "$module_dir/tests"
+(
+  cd -- "$repo_root"
+  TOMLSMITH_TOML_TEST_CORPUS="$module_dir/tests" CARGO_TARGET_DIR="$cargo_target" \
+    cargo test --locked -p tomlsmith --test conformance_corpus
+) || run_exit_code=1
 exit "$run_exit_code"

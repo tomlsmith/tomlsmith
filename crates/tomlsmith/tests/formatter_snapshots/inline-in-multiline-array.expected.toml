@@ -1,0 +1,11 @@
+deps = [
+  { name = "a", version = "1" },
+  { name = "b", version = "2" },
+]
+wide = [
+  {
+    name = "alpha",
+    version = "1.0.0",
+    features = ["one", "two", "three"]
+  },
+]

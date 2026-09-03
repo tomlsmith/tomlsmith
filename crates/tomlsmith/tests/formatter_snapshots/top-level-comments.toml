@@ -1,0 +1,11 @@
+# project manifest
+
+
+
+# second paragraph
+answer=42
+
+
+[table] # trailing
+  # indented comment
+value = 1

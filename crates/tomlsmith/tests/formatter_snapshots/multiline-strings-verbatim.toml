@@ -1,0 +1,5 @@
+text = """
+  keep   spacing   
+	and tabs
+"""
+lit = '''\raw\n'''

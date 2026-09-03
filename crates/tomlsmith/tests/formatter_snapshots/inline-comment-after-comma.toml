@@ -1,0 +1,6 @@
+root = {
+  a = 1, # first
+  b = 2 # second
+}
+compact = { a = 1, # note
+  b = 2 }

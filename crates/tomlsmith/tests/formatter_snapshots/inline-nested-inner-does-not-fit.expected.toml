@@ -1,0 +1,7 @@
+root = {
+  first = {
+    alpha = "aaaaaaaaaaaaaaaa",
+    beta = "bbbbbbbbbbbbbbbb"
+  },
+  tail = 1
+}

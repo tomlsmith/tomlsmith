@@ -1,0 +1,2 @@
+package={version="4.5",features=["derive"]}
+other = { a = 1, b = { c = 2 } }

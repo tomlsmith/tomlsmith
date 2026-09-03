@@ -1,0 +1,7 @@
+package = {
+  text = """alpha
+beta""",
+  other = 1,
+  literal = '''x
+y'''
+}
