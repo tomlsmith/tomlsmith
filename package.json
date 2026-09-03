@@ -14,9 +14,10 @@
     "npm:package": "cargo build --release --package tomlsmith-cli && pnpm npm:stage --binary target/release/tomlsmith && pnpm npm:build && pnpm npm:check && pnpm npm:pack",
     "npm:publish": "tsx npm/scripts/package.ts publish",
     "npm:stage": "tsx npm/scripts/package.ts stage",
-    "npm:test": "cargo build --package tomlsmith-cli && pnpm npm:stage --binary target/debug/tomlsmith && pnpm npm:build && pnpm npm:check && pnpm npm:pack && vitest run --config npm/vitest.config.ts",
+    "npm:test": "cargo build --package tomlsmith-cli && pnpm npm:stage --binary target/debug/tomlsmith && pnpm npm:build && pnpm npm:check && pnpm npm:pack && vitest run --config npm/vitest.config.ts --exclude npm/cli/tests/performance.test.ts",
+    "npm:performance": "cargo build --release --package tomlsmith-cli && pnpm npm:stage --binary target/release/tomlsmith && vitest run --config npm/vitest.config.ts npm/cli/tests/performance.test.ts --reporter verbose",
     "npm:test:packed": "vitest run --config npm/vitest.config.ts -t \"the packed npm distribution installs an executable native CLI\"",
-    "npm:test:watch": "vitest --config npm/vitest.config.ts",
+    "npm:test:watch": "vitest --config npm/vitest.config.ts --exclude npm/cli/tests/performance.test.ts",
     "npm:typecheck": "tsc --project npm/tsconfig.json --noEmit"
   },
   "devDependencies": {

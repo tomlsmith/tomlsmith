@@ -170,6 +170,310 @@ jobs:
       - name: Build, pack, install, and test the npm CLI
         run: pnpm npm:test
 
+  performance:
+    name: Performance guard (release CLI)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      comparison-sha: ${{ steps.performance-base.outputs.sha }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          # The pull_request merge commit and both of its parents.
+          fetch-depth: 2
+
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Cache release build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: performance
+          cache-on-failure: true
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install npm workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Resolve performance comparison SHA
+        id: performance-base
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          comparison_sha=""
+          if [[ "$EVENT_NAME" == pull_request ]] && git rev-parse --verify -q HEAD^2 > /dev/null; then
+            # refs/pull/N/merge: the first parent is the base tip that was merged.
+            comparison_sha=$(git rev-parse HEAD^)
+          elif [[ "$EVENT_NAME" == pull_request ]]; then
+            comparison_sha="$PR_BASE_SHA"
+          elif [[ "$EVENT_NAME" == push \
+            && "$PUSH_BASE_SHA" != 0000000000000000000000000000000000000000 ]] \
+            && git fetch --quiet --depth=1 origin "$PUSH_BASE_SHA"; then
+            comparison_sha="$PUSH_BASE_SHA"
+          else
+            comparison_sha=$(git rev-parse HEAD^)
+          fi
+          if [[ ! "$comparison_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "could not resolve a complete performance comparison SHA" >&2
+            exit 1
+          fi
+          echo "sha=$comparison_sha" >> "$GITHUB_OUTPUT"
+          mkdir -p target/performance
+          {
+            echo "head_sha=${GITHUB_SHA}"
+            echo "comparison_sha=${comparison_sha}"
+            echo "event=${EVENT_NAME}"
+            rustc --version
+            node --version
+          } > target/performance/context.txt
+
+      - name: Restore cached comparison release CLI
+        id: performance-base-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/tomlsmith-performance-base/release/tomlsmith
+          key: performance-base-${{ runner.os }}-${{ steps.performance-base.outputs.sha }}-${{ hashFiles('rust-toolchain.toml') }}
+
+      - name: Check out performance comparison SHA
+        if: steps.performance-base-cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.performance-base.outputs.sha }}
+          path: performance-base
+
+      - name: Build comparison release CLI
+        if: steps.performance-base-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --package tomlsmith-cli \
+            --manifest-path performance-base/Cargo.toml \
+            --target-dir "${RUNNER_TEMP}/tomlsmith-performance-base"
+
+      - name: Install GNU time and Valgrind
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y time valgrind
+          /usr/bin/time --version
+          valgrind --version
+
+      - name: Guard release-CLI complexity and compare with the comparison SHA
+        shell: bash
+        env:
+          TOMLSMITH_BASELINE_BIN: ${{ runner.temp }}/tomlsmith-performance-base/release/tomlsmith
+          TOMLSMITH_REQUIRE_BASELINE: "1"
+          # Growth waterlines and memory waterlines block; head-versus-comparison
+          # wall-time ratios are advisory above 1.35x on shared runners and block
+          # only above 3x.
+          TOMLSMITH_PERFORMANCE_BUDGET_MODE: advisory
+          TOMLSMITH_PERFORMANCE_SUMMARY: target/performance/summary.json
+        run: |
+          set -euo pipefail
+          pnpm npm:performance 2>&1 | tee target/performance/vitest.log
+
+      - name: Compare instruction counts with the comparison SHA
+        shell: bash
+        env:
+          TOMLSMITH_BASELINE_BIN: ${{ runner.temp }}/tomlsmith-performance-base/release/tomlsmith
+        # Instruction counts are deterministic on shared runners, so this is
+        # the one head-versus-comparison delta that blocks at a tight budget.
+        run: |
+          set -euo pipefail
+          tools/performance/callgrind-compare.sh \
+            "$(node -e 'console.log(require.resolve("@tomlsmith/cli-linux-x64/bin/tomlsmith"))')" \
+            "$TOMLSMITH_BASELINE_BIN" \
+            target/performance/instructions.md 2>&1 | tee target/performance/callgrind.log
+
+      - name: Publish performance summary
+        if: always()
+        shell: bash
+        env:
+          COMPARISON_SHA: ${{ steps.performance-base.outputs.sha }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Performance guard"
+            echo
+            echo "- head: \`${GITHUB_SHA}\`  comparison: \`${COMPARISON_SHA}\`"
+            echo
+            if [[ -s target/performance/instructions.md ]]; then
+              cat target/performance/instructions.md
+              echo
+            fi
+            if [[ -s target/performance/summary.json ]]; then
+              echo "| case | comparison ms | head ms | paired median ratio | MAD | budget | verdict |"
+              echo "| --- | --- | --- | --- | --- | --- | --- |"
+              jq -r '.comparisons[] | "| \(.name) | \(.baseline | tostring | .[0:7]) | \(.head | tostring | .[0:7]) | \(.ratio | tostring | .[0:5]) | \(.mad | tostring | .[0:5]) | advisory \(.adviseAbove)x / block \(.blockAbove)x | \(.verdict) |"' target/performance/summary.json
+              echo
+              echo "| growth case | small ms (floor-corrected) | large ms (floor-corrected) | ratio | limit |"
+              echo "| --- | --- | --- | --- | --- |"
+              jq -r '.growth[] | "| \(.name) | \(.small | tostring | .[0:7]) | \(.large | tostring | .[0:7]) | \(.ratio | tostring | .[0:5]) | < \(.limit) |"' target/performance/summary.json
+              echo
+              echo "| memory case | input bytes | peak RSS MiB | budget MiB | verdict |"
+              echo "| --- | --- | --- | --- | --- |"
+              jq -r '.memory[] | "| \(.name) | \(.inputBytes) | \(.peakRssMiB | tostring | .[0:6]) | \(.budgetMiB) | \(.verdict) |"' target/performance/summary.json
+            else
+              echo "no summary.json was produced; see the performance-samples artifact"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload performance samples
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: performance-samples-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/performance/
+          retention-days: 30
+          if-no-files-found: warn
+
+  # Full-fidelity Criterion lanes from the benchmark repository, run for the
+  # head and comparison binaries only (no competitors) on four parallel
+  # runners. Advisory: shared-runner medians drift, so the step summary and
+  # artifacts are evidence for a reviewer, not a gate. Opt in with the
+  # `performance` pull-request label or a manual run.
+  performance-build:
+    name: Build head and comparison release CLIs
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'performance')
+    needs: performance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Cache release build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: performance
+
+      - name: Build head release CLI
+        run: cargo build --release --package tomlsmith-cli
+
+      - name: Check out performance comparison SHA
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.performance.outputs.comparison-sha }}
+          path: performance-base
+
+      - name: Build comparison release CLI
+        run: >-
+          cargo build --release --package tomlsmith-cli
+          --manifest-path performance-base/Cargo.toml
+          --target-dir "${{ runner.temp }}/tomlsmith-performance-base"
+
+      - name: Stage binaries
+        run: |
+          mkdir -p staged
+          cp target/release/tomlsmith staged/tomlsmith-head
+          cp "${{ runner.temp }}/tomlsmith-performance-base/release/tomlsmith" staged/tomlsmith-base
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: performance-binaries-${{ github.run_id }}-${{ github.run_attempt }}
+          path: staged/
+          retention-days: 7
+          if-no-files-found: error
+
+  performance-criterion:
+    name: Criterion lane (${{ matrix.lane }})
+    needs: [performance, performance-build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include:
+          - { lane: check-v1_0, filter: e2e/check/cold-stdin/1.0/v1_0_medium }
+          - { lane: check-v1_1, filter: e2e/check/cold-stdin/1.1/v1_1_medium }
+          - { lane: format-v1_0, filter: e2e/format/cold-stdin/1.0/v1_0_medium }
+          - { lane: format-v1_1, filter: e2e/format/cold-stdin/1.1/v1_1_medium }
+    steps:
+      - name: Check out the public benchmark repository
+        uses: actions/checkout@v7
+        with:
+          repository: tomlsmith/benchmark
+          ref: main
+          path: tomlsmith-benchmark
+
+      - name: Install the benchmark's pinned Rust toolchain
+        working-directory: tomlsmith-benchmark
+        run: rustup toolchain install
+
+      - name: Cache benchmark Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tomlsmith-benchmark
+          shared-key: performance-criterion
+
+      - name: Download head and comparison binaries
+        uses: actions/download-artifact@v8
+        with:
+          name: performance-binaries-${{ github.run_id }}-${{ github.run_attempt }}
+          path: binaries
+
+      - name: Run the TomlSmith-only lane for both binaries
+        working-directory: tomlsmith-benchmark
+        shell: bash
+        env:
+          TOMLSMITH_BIN_EXPECTED_VERSION: any
+          TOMLSMITH_BENCH_FILTER: ${{ matrix.filter }}
+          TOMLSMITH_BENCH_WARMUP_SECS: "1"
+          TOMLSMITH_BENCH_MEASUREMENT_SECS: "3"
+          TOMLSMITH_BENCH_SAMPLE_SIZE: "20"
+        run: |
+          set -euo pipefail
+          chmod +x "${GITHUB_WORKSPACE}/binaries/tomlsmith-head" "${GITHUB_WORKSPACE}/binaries/tomlsmith-base"
+          unset CARGO_INCREMENTAL CARGO_BUILD_INCREMENTAL
+          for label in base head; do
+            TOMLSMITH_BIN="${GITHUB_WORKSPACE}/binaries/tomlsmith-${label}" \
+            CRITERION_HOME="${RUNNER_TEMP}/criterion-${label}" \
+              cargo bench --locked -p tomlsmith-benchmark --bench competitors 2>&1 \
+              | tee "${RUNNER_TEMP}/criterion-${label}.log"
+          done
+          {
+            echo "## Criterion lane ${{ matrix.lane }} (advisory, shared runner)"
+            echo
+            for label in base head; do
+              echo "### ${label}"
+              echo '```'
+              grep -E 'time:' "${RUNNER_TEMP}/criterion-${label}.log" || true
+              echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload lane results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: performance-criterion-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/criterion-base/
+            ${{ runner.temp }}/criterion-head/
+            ${{ runner.temp }}/criterion-base.log
+            ${{ runner.temp }}/criterion-head.log
+          retention-days: 30
+          if-no-files-found: warn
+
   toml-test:
     name: TOML conformance
     runs-on: ubuntu-latest

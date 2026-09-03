@@ -96,6 +96,78 @@ test("formatting normalizes inline-table layout and keeps non-empty padding", ()
   expect(secondPass.stdout).toBe(expected);
 });
 
+test("formatting a flat inline table preserves semantic whitespace inside values", () => {
+  const cases = [
+    {
+      source: 'event={when=1979-05-27 07:32:00Z,note="keep spelling"}\n',
+      expected:
+        'event = { when = 1979-05-27 07:32:00Z, note = "keep spelling" }\n',
+    },
+    {
+      source:
+        "event={values=[1979-05-27 07:32:00Z],nested={when=1979-05-27 07:32:00Z}}\n",
+      expected:
+        "event = { values = [1979-05-27 07:32:00Z], nested = { when = 1979-05-27 07:32:00Z } }\n",
+    },
+  ];
+
+  for (const { source, expected } of cases) {
+    const firstPass = spawnSync(process.execPath, [cliPath, "fmt", "-"], {
+      encoding: "utf8",
+      input: source,
+    });
+
+    expect(firstPass.error).toBeUndefined();
+    expect(firstPass.status, firstPass.stderr).toBe(0);
+    expect(firstPass.stderr).toBe("");
+    expect(firstPass.stdout).toBe(expected);
+
+    const checked = spawnSync(process.execPath, [cliPath, "check", "-"], {
+      encoding: "utf8",
+      input: firstPass.stdout,
+    });
+    expect(checked.error).toBeUndefined();
+    expect(checked.status, checked.stderr).toBe(0);
+    expect(checked.stdout).toBe("");
+    expect(checked.stderr).toBe("");
+
+    const secondPass = spawnSync(process.execPath, [cliPath, "fmt", "-"], {
+      encoding: "utf8",
+      input: firstPass.stdout,
+    });
+
+    expect(secondPass.error).toBeUndefined();
+    expect(secondPass.status, secondPass.stderr).toBe(0);
+    expect(secondPass.stderr).toBe("");
+    expect(secondPass.stdout).toBe(expected);
+  }
+});
+
+test("formatting an expanded inline table preserves complete comment tokens", () => {
+  const source =
+    "root = {\n  # keep trailing comment spaces   \n  a=1,\n}\n";
+  const expected =
+    "root = {\n  # keep trailing comment spaces   \n  a = 1,\n}\n";
+
+  const firstPass = spawnSync(process.execPath, [cliPath, "fmt", "-"], {
+    encoding: "utf8",
+    input: source,
+  });
+  expect(firstPass.error).toBeUndefined();
+  expect(firstPass.status, firstPass.stderr).toBe(0);
+  expect(firstPass.stderr).toBe("");
+  expect(firstPass.stdout).toBe(expected);
+
+  const secondPass = spawnSync(process.execPath, [cliPath, "fmt", "-"], {
+    encoding: "utf8",
+    input: firstPass.stdout,
+  });
+  expect(secondPass.error).toBeUndefined();
+  expect(secondPass.status, secondPass.stderr).toBe(0);
+  expect(secondPass.stderr).toBe("");
+  expect(secondPass.stdout).toBe(expected);
+});
+
 test("the npm executable reports an omitted platform package without a stack trace", async () => {
   const directory = await mkdtemp(join(tmpdir(), "tomlsmith-npm-cli-"));
   temporaryDirectories.push(directory);
