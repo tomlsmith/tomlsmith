@@ -25,6 +25,7 @@ This file applies to the entire repository.
 ## Verification
 
 - Add focused regression tests in the crate that owns the behavior. Assert stable diagnostic codes unless exact wording is the intended contract.
+- Formatter layout changes must update the snapshot suite deliberately (`TOMLSMITH_UPDATE_SNAPSHOTS=1 cargo test -p tomlsmith --test formatter_snapshots`, then review the diff), and changes touching whole-document traversal, scope lookup, or layout planning must keep `crates/tomlsmith/tests/complexity.rs` green and extend it; the complexity contracts themselves live in `docs/architecture.md`.
 - Use the standard Rust gate from `CONTRIBUTING.md`; use the CI workflow for the additional MSRV gate.
 - Changes that can alter TOML acceptance or rejection, error severity, decoded semantic values, or decoder protocol output must also pass `bash tools/toml-test/run.sh`. Local decoder package tests are not a substitute for the pinned upstream TOML 1.0 and 1.1 suites.
 - Core public API changes must also pass `bash .github/scripts/check-rowan-api.sh`.

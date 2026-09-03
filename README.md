@@ -16,7 +16,7 @@ https://github.com/user-attachments/assets/1a6e65f9-e0f2-43de-8428-6bea7a4078c6
 In the terminal and CI:
 
 - Validate TOML 1.0 or 1.1 and report diagnostics with source locations.
-- Format documents while preserving comments and literal spellings in covered cases, or use `fmt --check` without changing files.
+- Format documents while preserving comments and literal spellings in covered cases, or use `fmt --check` without changing files. TOML 1.1 inline tables stay on one line when they fit the line width (a trailing comma is kept but never forces expansion) and expand one entry per line when they do not, contain a comment, or contain a multi-line string.
 - Emit machine-readable diagnostic JSON for tools and automation.
 
 In editors:
