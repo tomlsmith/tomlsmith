@@ -470,13 +470,85 @@ fn child_node(
     None
 }
 
+#[derive(Default)]
+struct ArrayScopeIndex {
+    root: ArrayScopeNode,
+}
+
+#[derive(Default)]
+struct ArrayScopeNode {
+    scope: Option<u32>,
+    children: FastMap<Arc<str>, Self>,
+}
+
+impl ArrayScopeIndex {
+    /// Finds the nearest active array-table scope that is a strict prefix of
+    /// `path`. The exact path belongs to the scope that encloses its header,
+    /// not to the previous element declared at that same path.
+    fn enclosing(&self, path: &[Arc<str>]) -> Option<u32> {
+        let mut node = &self.root;
+        let mut selected = None;
+        for segment in path.iter().take(path.len().saturating_sub(1)) {
+            let Some(child) = node.children.get(segment.as_ref()) else {
+                break;
+            };
+            node = child;
+            if node.scope.is_some() {
+                selected = node.scope;
+            }
+        }
+        selected
+    }
+
+    /// Walks `path` once and returns, for every strict prefix length in
+    /// `1..path.len()`, the scope that [`Self::enclosing`] would report for
+    /// that prefix. Implicit-parent bookkeeping needs all of them for each
+    /// header, so a single walk keeps that step `O(depth)` instead of
+    /// `O(depth^2)` repeated lookups.
+    fn enclosing_prefixes(&self, path: &[Arc<str>]) -> Vec<u32> {
+        let mut scopes = Vec::with_capacity(path.len().saturating_sub(1));
+        let mut node = Some(&self.root);
+        let mut selected = 0;
+        for prefix_length in 1..path.len() {
+            // The prefix of length `k` only consults its own strict prefixes,
+            // so the scope for `path[..k]` is settled once `path[k - 2]` has
+            // been visited; the first prefix has no strict prefix at all.
+            if prefix_length >= 2 {
+                node = node.and_then(|current| {
+                    let child = current.children.get(path[prefix_length - 2].as_ref())?;
+                    if let Some(scope) = child.scope {
+                        selected = scope;
+                    }
+                    Some(child)
+                });
+            }
+            scopes.push(selected);
+        }
+        scopes
+    }
+
+    /// Activates `path` while retiring only that path's previous scope and
+    /// descendants. Ancestors and unrelated sibling branches remain active.
+    fn activate(&mut self, path: &[Arc<str>], scope: u32) {
+        // Headers with an empty path are discarded before lowering reaches
+        // here; a root-level scope would be invisible to `enclosing`.
+        debug_assert!(!path.is_empty(), "array-table scopes need a path");
+        let mut node = &mut self.root;
+        for segment in path {
+            node = node.children.entry(Arc::clone(segment)).or_default();
+        }
+        node.scope = Some(scope);
+        node.children.clear();
+    }
+}
+
 struct LoweringState<'source> {
     source: &'source str,
     current_table: Vec<Arc<str>>,
     discard_current_table_entries: bool,
     current_scope: u32,
     next_scope: u32,
-    active_array_tables: Vec<(Vec<Arc<str>>, u32)>,
+    active_array_tables: ArrayScopeIndex,
     // Path-keyed indexes so per-statement namespace checks stay O(depth)
     // instead of rescanning every prior declaration. The scope lists are
     // almost always a single element.
@@ -495,7 +567,7 @@ impl<'source> LoweringState<'source> {
             discard_current_table_entries: false,
             current_scope: 0,
             next_scope: 1,
-            active_array_tables: Vec::new(),
+            active_array_tables: ArrayScopeIndex::default(),
             explicit_tables: FastMap::default(),
             implicit_table_paths: FastMap::default(),
             declared_paths: FastMap::default(),
@@ -519,8 +591,10 @@ impl<'source> LoweringState<'source> {
             return;
         }
 
-        let scope =
-            enclosing_array_scope(&self.current_table, &self.active_array_tables).unwrap_or(0);
+        let scope = self
+            .active_array_tables
+            .enclosing(&self.current_table)
+            .unwrap_or(0);
         self.current_scope = scope;
         let promotes_implicit_table = self.promote_implicit_table();
         self.record_implicit_parents();
@@ -548,8 +622,10 @@ impl<'source> LoweringState<'source> {
             return;
         }
 
-        let scope =
-            enclosing_array_scope(&self.current_table, &self.active_array_tables).unwrap_or(0);
+        let scope = self
+            .active_array_tables
+            .enclosing(&self.current_table)
+            .unwrap_or(0);
         if self
             .implicit_table_paths
             .get(&self.current_table)
@@ -568,11 +644,8 @@ impl<'source> LoweringState<'source> {
 
         let element_scope = self.next_scope;
         self.next_scope = self.next_scope.saturating_add(1);
-        activate_array_scope(
-            &mut self.active_array_tables,
-            &self.current_table,
-            element_scope,
-        );
+        self.active_array_tables
+            .activate(&self.current_table, element_scope);
         self.current_scope = element_scope;
         Self::record_declared_path(&mut self.declared_paths, &self.current_table, scope);
         self.declarations.push(Declaration {
@@ -660,9 +733,12 @@ impl<'source> LoweringState<'source> {
     }
 
     fn record_implicit_parents(&mut self) {
+        let prefix_scopes = self
+            .active_array_tables
+            .enclosing_prefixes(&self.current_table);
         for prefix_length in 1..self.current_table.len() {
             let prefix = &self.current_table[..prefix_length];
-            let scope = enclosing_array_scope(prefix, &self.active_array_tables).unwrap_or(0);
+            let scope = prefix_scopes[prefix_length - 1];
             let explicitly_known = self
                 .declared_paths
                 .get(prefix)
@@ -681,7 +757,7 @@ impl<'source> LoweringState<'source> {
     }
 
     fn diagnose_array_table_extension(&mut self, declaration: &Declaration, key: &[Arc<str>]) {
-        let Some(array_scope) = enclosing_array_scope(key, &self.active_array_tables) else {
+        let Some(array_scope) = self.active_array_tables.enclosing(key) else {
             return;
         };
         if array_scope != declaration.scope {
@@ -1039,29 +1115,6 @@ fn statement_key_range(node: &rowan::GreenNodeData, offset: usize) -> TextRange 
         || node_range(node, offset),
         |(key, key_offset)| node_range(key, key_offset),
     )
-}
-
-fn enclosing_array_scope(path: &[Arc<str>], active: &[(Vec<Arc<str>>, u32)]) -> Option<u32> {
-    let mut selected = None;
-    let mut selected_length = 0;
-    for (candidate, scope) in active {
-        if is_prefix(candidate, path) && candidate.len() >= selected_length {
-            selected = Some(*scope);
-            selected_length = candidate.len();
-        }
-    }
-    selected
-}
-
-fn retire_array_scopes_at_or_below(active: &mut Vec<(Vec<Arc<str>>, u32)>, path: &[Arc<str>]) {
-    active.retain(|(candidate, _)| {
-        candidate.as_slice() != path && !is_prefix(path, candidate.as_slice())
-    });
-}
-
-fn activate_array_scope(active: &mut Vec<(Vec<Arc<str>>, u32)>, path: &[Arc<str>], scope: u32) {
-    retire_array_scopes_at_or_below(active, path);
-    active.push((path.to_vec(), scope));
 }
 
 #[derive(Default)]
@@ -2163,20 +2216,56 @@ mod tests {
     }
 
     #[test]
+    fn enclosing_prefixes_matches_a_lookup_per_prefix() {
+        let mut active = ArrayScopeIndex::default();
+        active.activate(&segments(&["a"]), 1);
+        active.activate(&segments(&["a", "b", "c"]), 2);
+        active.activate(&segments(&["x"]), 3);
+        for path in [
+            segments(&["a", "b", "c", "d", "e"]),
+            segments(&["a", "b"]),
+            segments(&["x", "y", "z"]),
+            segments(&["q", "a", "b"]),
+            segments(&["a"]),
+            Vec::new(),
+        ] {
+            let expected: Vec<u32> = (1..path.len())
+                .map(|length| active.enclosing(&path[..length]).unwrap_or(0))
+                .collect();
+            assert_eq!(active.enclosing_prefixes(&path), expected, "{path:?}");
+        }
+    }
+
+    #[test]
     fn activating_array_scope_replaces_the_same_path_and_its_descendants() {
         let records = segments(&["records"]);
-        let mut active = vec![
-            (segments(&["unrelated"]), 7),
-            (records.clone(), 1),
-            (segments(&["records", "details"]), 2),
-        ];
+        let mut active = ArrayScopeIndex::default();
+        active.activate(&segments(&["unrelated"]), 7);
+        active.activate(&records, 1);
+        active.activate(&segments(&["records", "details"]), 2);
 
-        activate_array_scope(&mut active, &records, 3);
-
-        assert_eq!(active, vec![(segments(&["unrelated"]), 7), (records, 3)]);
         assert_eq!(
-            enclosing_array_scope(&segments(&["records", "name"]), &active),
-            Some(3)
+            active.enclosing(&segments(&["records", "details", "name"])),
+            Some(2),
+            "the longest active strict prefix must win"
+        );
+        active.activate(&records, 3);
+
+        assert_eq!(
+            active.enclosing(&records),
+            None,
+            "an active array scope must only enclose strict descendants"
+        );
+        assert_eq!(active.enclosing(&segments(&["records", "name"])), Some(3));
+        assert_eq!(
+            active.enclosing(&segments(&["records", "details", "name"])),
+            Some(3),
+            "activating records must retire its previous descendant scope"
+        );
+        assert_eq!(
+            active.enclosing(&segments(&["unrelated", "name"])),
+            Some(7),
+            "activating records must preserve unrelated sibling scopes"
         );
     }
 

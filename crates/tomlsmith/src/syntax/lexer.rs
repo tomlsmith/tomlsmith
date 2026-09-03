@@ -4,20 +4,88 @@ use crate::{Diagnostic, DiagnosticCode, TextRange};
 
 use super::SyntaxKind;
 
-#[derive(Clone, Debug)]
+/// One lexed token, materialized on demand from a [`TokenTape`].
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Token {
     pub(crate) kind: SyntaxKind,
     pub(crate) range: Range<usize>,
 }
 
+/// The token stream of one source text in a compact columnar form.
+///
+/// Every token costs six bytes (its kind and its start offset); a token's end
+/// is the next token's start or the text length, so a tape is about a fifth
+/// of the size of a `Vec<Token>` and cheap enough for a snapshot to keep for
+/// its editor products. Offsets are `u32` like every public range.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TokenTape {
+    kinds: Vec<SyntaxKind>,
+    starts: Vec<u32>,
+    end: u32,
+}
+
+impl TokenTape {
+    fn with_capacity(tokens: usize) -> Self {
+        Self {
+            kinds: Vec::with_capacity(tokens),
+            starts: Vec::with_capacity(tokens),
+            end: 0,
+        }
+    }
+
+    fn push(&mut self, kind: SyntaxKind, start: usize) {
+        self.kinds.push(kind);
+        self.starts.push(offset(start));
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.kinds.len()
+    }
+
+    /// The kind of token `index`; panics when out of bounds like slice indexing.
+    pub(crate) fn kind(&self, index: usize) -> SyntaxKind {
+        self.kinds[index]
+    }
+
+    /// The byte range of token `index`; panics when out of bounds like slice indexing.
+    pub(crate) fn range(&self, index: usize) -> Range<usize> {
+        let start = self.starts[index];
+        let end = self.starts.get(index + 1).copied().unwrap_or(self.end);
+        start as usize..end as usize
+    }
+
+    pub(crate) fn get(&self, index: usize) -> Option<Token> {
+        (index < self.len()).then(|| Token {
+            kind: self.kind(index),
+            range: self.range(index),
+        })
+    }
+
+    pub(crate) fn last(&self) -> Option<Token> {
+        self.get(self.len().checked_sub(1)?)
+    }
+
+    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = Token> + ExactSizeIterator + '_ {
+        (0..self.len()).map(|index| Token {
+            kind: self.kind(index),
+            range: self.range(index),
+        })
+    }
+}
+
+fn offset(value: usize) -> u32 {
+    u32::try_from(value).expect("source text is bounded by u32 offsets")
+}
+
 pub(crate) struct Lexed {
-    pub(crate) tokens: Vec<Token>,
+    pub(crate) tokens: TokenTape,
     pub(crate) diagnostics: Vec<Diagnostic>,
 }
 
 pub(crate) fn lex(source: &str) -> Lexed {
     let bytes = source.as_bytes();
-    let mut tokens = Vec::new();
+    // Real documents average roughly five bytes per token.
+    let mut tokens = TokenTape::with_capacity(source.len() / 5);
     let mut diagnostics = Vec::new();
     let mut cursor = 0;
 
@@ -84,11 +152,9 @@ pub(crate) fn lex(source: &str) -> Lexed {
             }
         };
 
-        tokens.push(Token {
-            kind,
-            range: start..cursor,
-        });
+        tokens.push(kind, start);
     }
+    tokens.end = offset(source.len());
 
     Lexed {
         tokens,

@@ -1,4 +1,7 @@
-use crate::{SyntaxKind, TextRange, syntax::lexer::Token};
+use crate::{
+    SyntaxKind, TextRange,
+    syntax::lexer::{Token, TokenTape},
+};
 
 /// A source-level semantic classification suitable for editor highlighting.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -57,11 +60,11 @@ impl Highlight {
     }
 }
 
-pub(crate) fn collect(source: &str, tokens: &[Token]) -> Vec<Highlight> {
+pub(crate) fn collect(source: &str, tokens: &TokenTape) -> Vec<Highlight> {
     let mut highlights = Vec::new();
     let mut state = CollectorState::new();
 
-    for token in tokens {
+    for token in tokens.iter() {
         let raw = &source[token.range.clone()];
         let inline_table_member = state.is_inline_table_member();
         resolve_pending_key_kind(
@@ -77,7 +80,7 @@ pub(crate) fn collect(source: &str, tokens: &[Token]) -> Vec<Highlight> {
             push_highlight(
                 &mut highlights,
                 &mut state.pending_key_highlights,
-                token,
+                &token,
                 kind,
                 inline_table_member,
             );

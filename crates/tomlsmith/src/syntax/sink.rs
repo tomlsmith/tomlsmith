@@ -1,16 +1,15 @@
 use rowan::GreenNodeBuilder;
 
-use super::{Token, parser::Event};
+use super::{TokenTape, parser::Event};
 
-pub(crate) fn finish(source: &str, tokens: &[Token], events: &[Event]) -> rowan::GreenNode {
+pub(crate) fn finish(source: &str, tokens: &TokenTape, events: &[Event]) -> rowan::GreenNode {
     let mut builder = GreenNodeBuilder::new();
 
     for event in events {
         match *event {
             Event::Start(kind) => builder.start_node(kind.into()),
             Event::Token(index) => {
-                let token = &tokens[index];
-                builder.token(token.kind.into(), &source[token.range.clone()]);
+                builder.token(tokens.kind(index).into(), &source[tokens.range(index)]);
             }
             Event::Finish => builder.finish_node(),
         }

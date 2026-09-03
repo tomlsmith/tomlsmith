@@ -1,8 +1,17 @@
-use std::{fmt, sync::Arc};
+use std::{
+    fmt,
+    sync::{Arc, OnceLock},
+};
 
 use rowan::GreenNode;
 
 use crate::{Diagnostic, SemanticDocument, SyntaxNode, semantic, syntax};
+
+/// Sources at least this large overlap validation and optional formatting
+/// with semantic lowering on one scoped worker; below it the work is smaller
+/// than the thread start it would need.
+#[cfg(not(target_family = "wasm"))]
+const PARALLEL_ANALYSIS_THRESHOLD_BYTES: usize = 8 * 1024;
 
 /// The published TOML language specification used to parse and validate a snapshot.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -20,10 +29,10 @@ pub enum TomlVersion {
 /// queryable snapshot rather than mutating the original.
 #[derive(Clone)]
 pub struct Document {
-    inner: Arc<DocumentData>,
+    inner: Arc<AnalysisSnapshot>,
 }
 
-struct DocumentData {
+struct AnalysisSnapshot {
     text: Arc<str>,
     version: TomlVersion,
     revision: Revision,
@@ -31,7 +40,12 @@ struct DocumentData {
     green: GreenNode,
     diagnostics: Arc<[Diagnostic]>,
     semantic: SemanticDocument,
-    highlights: Arc<[crate::Highlight]>,
+    /// The compact token tape behind the editor products, lexed on first use
+    /// so `check` and one-shot `format` never retain one; about six bytes
+    /// per token once an editor asks for highlights or a reformat.
+    tape: OnceLock<syntax::TokenTape>,
+    /// Editor-only spans, produced from the tape on first use.
+    highlights: OnceLock<Arc<[crate::Highlight]>>,
 }
 
 /// A monotonically increasing identifier for snapshots derived through [`Document::with_changes`].
@@ -127,36 +141,6 @@ impl Document {
         Self::parse_pipeline(text, version, revision, None).0
     }
 
-    /// Parses `text` under `version` and immediately formats the snapshot
-    /// with `options`, producing exactly what `parse_as` followed by
-    /// `format_with` would. One-shot pipelines get the formatted text's
-    /// purely lexical construction overlapped with semantic analysis.
-    #[must_use]
-    pub fn parse_and_format_with(
-        text: impl Into<Arc<str>>,
-        version: TomlVersion,
-        options: &crate::FormatOptions,
-    ) -> (Self, crate::FormatOutcome) {
-        let text = text.into();
-        if options.target_version != version {
-            // A version mismatch makes the formatter's safety check re-parse
-            // under the target version, so there is no overlap to win here.
-            let document = Self::parse_at(text, version, Revision::INITIAL);
-            let outcome = document.format_with(options);
-            return (document, outcome);
-        }
-        let (document, formatted) =
-            Self::parse_pipeline(text, version, Revision::INITIAL, Some(options));
-        let outcome = match formatted {
-            Some(output) => crate::formatter::finish_prebuilt(&document, options, output),
-            None => document.format_with(options),
-        };
-        (document, outcome)
-    }
-
-    /// Shared parse pipeline. When `format_options` is given, the formatted
-    /// text is additionally produced on the side-analysis thread, so a
-    /// one-shot parse-then-format pipeline pays no extra wall time for it.
     fn parse_pipeline(
         text: Arc<str>,
         version: TomlVersion,
@@ -168,55 +152,90 @@ impl Document {
             mut diagnostics,
             tokens,
         } = syntax::parse(&text);
-        // Highlight collection, validation, and the optional lexical
-        // formatting pass only need the source text, token stream, and green
-        // tree. Native targets overlap them with semantic lowering. WebAssembly
-        // targets run the same pure operations sequentially because
-        // `wasm32-unknown-unknown` has no native thread-spawn capability.
+        // A lexer or parser diagnostic that refuses formatting makes the
+        // guarded outcome `Refused` regardless of layout, so the speculative
+        // render is skipped: it could only waste work (and, for pathological
+        // nesting, memory) on text that will never be written.
+        let refuses_formatting = diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code().refuses_formatting());
+        let format_options = format_options.filter(|_| !refuses_formatting);
         #[cfg(target_family = "wasm")]
-        let (lowered, (highlights, validation_diagnostics, formatted)) = {
+        let (lowered, validation_diagnostics, formatted) = {
             let lowered = semantic::lower(&text, &green);
-            let highlights = crate::highlight::collect(&text, &tokens);
             let validation_diagnostics = crate::validate::validate(&text, version, &green, &tokens);
             let formatted =
-                format_options.map(|options| crate::formatter::build_text(&text, options));
-            (lowered, (highlights, validation_diagnostics, formatted))
+                format_options.map(|options| crate::formatter::build_text(&text, &tokens, options));
+            (lowered, validation_diagnostics, formatted)
         };
         #[cfg(not(target_family = "wasm"))]
-        let (lowered, (highlights, validation_diagnostics, formatted)) =
+        let (lowered, validation_diagnostics, formatted) = if text.len()
+            >= PARALLEL_ANALYSIS_THRESHOLD_BYTES
+        {
             std::thread::scope(|scope| {
                 let side = scope.spawn(|| {
-                    let highlights = crate::highlight::collect(&text, &tokens);
                     let validation_diagnostics =
                         crate::validate::validate(&text, version, &green, &tokens);
-                    let formatted =
-                        format_options.map(|options| crate::formatter::build_text(&text, options));
-                    (highlights, validation_diagnostics, formatted)
+                    let formatted = format_options
+                        .map(|options| crate::formatter::build_text(&text, &tokens, options));
+                    (validation_diagnostics, formatted)
                 });
                 let lowered = semantic::lower(&text, &green);
-                let side = match side.join() {
+                let (validation_diagnostics, formatted) = match side.join() {
                     Ok(side) => side,
                     Err(panic) => std::panic::resume_unwind(panic),
                 };
-                (lowered, side)
-            });
+                (lowered, validation_diagnostics, formatted)
+            })
+        } else {
+            (
+                semantic::lower(&text, &green),
+                crate::validate::validate(&text, version, &green, &tokens),
+                format_options.map(|options| crate::formatter::build_text(&text, &tokens, options)),
+            )
+        };
         drop(tokens);
         diagnostics.extend(validation_diagnostics);
         diagnostics.extend(lowered.diagnostics);
         diagnostics.sort_by_key(Diagnostic::range);
 
         let document = Self {
-            inner: Arc::new(DocumentData {
+            inner: Arc::new(AnalysisSnapshot {
                 text,
                 version,
                 revision,
                 green,
                 diagnostics: diagnostics.into(),
                 semantic: lowered.document,
-                highlights: highlights.into(),
+                tape: OnceLock::new(),
+                highlights: OnceLock::new(),
             }),
         };
         (document, formatted)
+    }
+
+    /// Parses `text` under `version` and immediately formats the snapshot
+    /// with `options`, producing exactly what `parse_as` followed by
+    /// `format_with` would.
+    #[must_use]
+    pub fn parse_and_format_with(
+        text: impl Into<Arc<str>>,
+        version: TomlVersion,
+        options: &crate::FormatOptions,
+    ) -> (Self, crate::FormatOutcome) {
+        let text = text.into();
+        if options.target_version != version {
+            let document = Self::parse_at(text, version, Revision::INITIAL);
+            let outcome = document.format_with(options);
+            return (document, outcome);
+        }
+        let (document, formatted) =
+            Self::parse_pipeline(text, version, Revision::INITIAL, Some(options));
+        let outcome = match formatted {
+            Some(output) => crate::formatter::finish_prebuilt(&document, options, output),
+            None => document.format_with(options),
+        };
+        (document, outcome)
     }
 
     /// Returns the exact source text owned by this snapshot.
@@ -252,7 +271,18 @@ impl Document {
     /// Returns source-backed semantic highlight spans.
     #[must_use]
     pub fn highlights(&self) -> &[crate::Highlight] {
-        &self.inner.highlights
+        self.inner
+            .highlights
+            .get_or_init(|| crate::highlight::collect(&self.inner.text, self.tape()).into())
+            .as_ref()
+    }
+
+    /// The snapshot's token tape, lexed once on first use and shared by the
+    /// formatter and highlighter.
+    pub(crate) fn tape(&self) -> &syntax::TokenTape {
+        self.inner
+            .tape
+            .get_or_init(|| syntax::lexer::lex(&self.inner.text).tokens)
     }
 
     /// Formats with default layout options and this snapshot's TOML version.

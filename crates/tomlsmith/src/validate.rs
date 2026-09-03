@@ -10,7 +10,7 @@ pub(crate) fn validate(
     source: &str,
     version: TomlVersion,
     green: &rowan::GreenNode,
-    tokens: &[lexer::Token],
+    tokens: &lexer::TokenTape,
 ) -> Vec<Diagnostic> {
     struct InlineTableState {
         bracket_depth: u32,
@@ -328,16 +328,15 @@ fn version_diagnostic(start: usize, end: usize, message: &'static str) -> Diagno
     )
 }
 
-fn next_significant_kind(tokens: &[lexer::Token], index: usize) -> Option<SyntaxKind> {
-    tokens[index + 1..]
-        .iter()
-        .find(|token| {
+fn next_significant_kind(tokens: &lexer::TokenTape, index: usize) -> Option<SyntaxKind> {
+    (index + 1..tokens.len())
+        .map(|index| tokens.kind(index))
+        .find(|kind| {
             !matches!(
-                token.kind,
+                kind,
                 SyntaxKind::Whitespace | SyntaxKind::Newline | SyntaxKind::Comment
             )
         })
-        .map(|token| token.kind)
 }
 
 fn validate_raw_control_characters(source: &str) -> Vec<Diagnostic> {

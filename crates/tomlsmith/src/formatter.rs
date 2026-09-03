@@ -98,7 +98,10 @@ pub(crate) fn format(document: &Document, options: &FormatOptions) -> FormatOutc
         };
     }
 
-    finish_format(document.text(), build_text(document.text(), options))
+    finish_format(
+        document.text(),
+        build_text(document.text(), document.tape(), options),
+    )
 }
 
 /// Turns already-built formatted text into the outcome `format` would have
@@ -117,338 +120,647 @@ pub(crate) fn finish_prebuilt(
     finish_format(document.text(), output)
 }
 
-/// The purely lexical formatting pass: produces the formatted text for
-/// `source` without consulting any parse result.
-pub(crate) fn build_text(source: &str, options: &FormatOptions) -> String {
-    let mut output = build_lexical_text(source, options);
-    if !output.contains('{') {
-        return output;
-    }
-    let pass_limit = output.bytes().filter(|byte| *byte == b'{').count();
-    for _ in 0..pass_limit {
-        let Some(normalized) = normalize_inline_table_layout(&output, options) else {
-            break;
-        };
-        let next = build_lexical_text(&normalized, options);
-        if next == output {
-            break;
-        }
-        output = next;
-    }
-    output
+/// The formatting pass over a token tape of `source`.
+///
+/// Formatting is three linear passes with no recursion and no re-lexing of
+/// produced text: a reverse pass records each token's next significant and
+/// content neighbours, a forward pass computes the canonical flat width and
+/// comment/multiline facts of every TOML 1.1 inline table in opening order,
+/// and one forward render pass writes the output while a delimiter-frame
+/// stack carries the layout mode chosen for each inline table at its opening
+/// brace. Time is bounded by the input tokens plus the produced bytes;
+/// transient memory is a few bytes per token plus one entry per inline table.
+pub(crate) fn build_text(
+    source: &str,
+    tokens: &lexer::TokenTape,
+    options: &FormatOptions,
+) -> String {
+    let lookahead = TokenLookahead::new(tokens);
+    let plan = (options.target_version != TomlVersion::V1_0 && lookahead.has_inline_table)
+        .then(|| InlineTablePlan::analyze(source, tokens, &lookahead));
+    Renderer::new(source, tokens, options, &lookahead, plan.as_ref()).render()
 }
 
-fn build_lexical_text(source: &str, options: &FormatOptions) -> String {
-    let lexed = lexer::lex(source);
-    let newline = selected_newline(source, options.line_ending);
-    let mut output = String::with_capacity(source.len());
-    let mut line_start = true;
-    let mut consecutive_newlines = 0_u8;
-    let mut depth = 0_usize;
-    let mut delimiters = Vec::new();
+/// Next-neighbour facts for every token, built in one reverse pass so the
+/// renderer never rescans the tape forwards.
+#[derive(Debug)]
+struct TokenLookahead {
+    /// The kind of the next token that is not a BOM or horizontal whitespace.
+    significant: Vec<Option<SyntaxKind>>,
+    /// The kind of the next token that is also not a newline.
+    content: Vec<Option<SyntaxKind>>,
+    has_inline_table: bool,
+}
 
-    for (index, token) in lexed.tokens.iter().enumerate() {
-        let raw = &source[token.range.clone()];
-        let previous = significant_before(&lexed.tokens, index);
-        let next = significant_after(&lexed.tokens, index);
-        if !matches!(token.kind, SyntaxKind::Whitespace | SyntaxKind::Newline) {
-            consecutive_newlines = 0;
-        }
-
-        match token.kind {
-            SyntaxKind::Bom => output.push_str(raw),
-            SyntaxKind::Whitespace => {
-                // Whitespace before a comment is always layout (see
-                // whitespace_is_layout); the Comment arm below writes the
-                // single separating space instead.
-                if line_start || whitespace_is_layout(previous, next) {
-                    continue;
-                }
-                output.push_str(raw);
+impl TokenLookahead {
+    fn new(tokens: &lexer::TokenTape) -> Self {
+        let mut significant = vec![None; tokens.len()];
+        let mut content = vec![None; tokens.len()];
+        let mut next_significant = None;
+        let mut next_content = None;
+        let mut has_inline_table = false;
+        for (index, token) in tokens.iter().enumerate().rev() {
+            significant[index] = next_significant;
+            content[index] = next_content;
+            if !matches!(token.kind, SyntaxKind::Bom | SyntaxKind::Whitespace) {
+                next_significant = Some(token.kind);
             }
-            SyntaxKind::Newline => {
-                if previous != Some(SyntaxKind::Comment) {
-                    trim_horizontal(&mut output);
-                }
-                let newline_limit = if preserves_blank_line(&lexed.tokens, index, depth) {
-                    2
-                } else {
-                    1
-                };
-                if consecutive_newlines < newline_limit {
-                    output.push_str(newline);
-                }
-                consecutive_newlines = consecutive_newlines.saturating_add(1);
-                line_start = true;
-            }
-            SyntaxKind::Comment => {
-                let starts_line = line_start;
-                indent_if_needed(&mut output, &mut line_start, depth, options.indent_width);
-                if !starts_line && !output.ends_with(['\n', '\r', ' ', '\t']) {
-                    output.push(' ');
-                }
-                output.push_str(raw);
-                line_start = false;
-            }
-            SyntaxKind::Equals => {
-                indent_if_needed(&mut output, &mut line_start, depth, options.indent_width);
-                trim_horizontal(&mut output);
-                output.push_str(" = ");
-            }
-            SyntaxKind::Comma => write_comma(
-                &mut output,
-                &mut line_start,
-                &delimiters,
-                next,
-                newline,
-                options.line_width,
-            ),
-            SyntaxKind::Dot => {
-                trim_horizontal(&mut output);
-                output.push('.');
-            }
-            SyntaxKind::LeftBracket | SyntaxKind::LeftBrace => {
-                indent_if_needed(&mut output, &mut line_start, depth, options.indent_width);
-                output.push_str(raw);
-                if token.kind == SyntaxKind::LeftBrace
-                    && !matches!(
-                        next,
-                        None | Some(
-                            SyntaxKind::Newline | SyntaxKind::Comment | SyntaxKind::RightBrace
-                        )
-                    )
-                {
-                    output.push(' ');
-                }
-                delimiters.push(token.kind);
-                depth += 1;
-            }
-            SyntaxKind::RightBracket | SyntaxKind::RightBrace => close_delimiter(
-                &mut output,
-                &mut line_start,
-                &mut depth,
-                &mut delimiters,
+            if !matches!(
                 token.kind,
-                raw,
-                options.indent_width,
-            ),
-            _ => {
-                indent_if_needed(&mut output, &mut line_start, depth, options.indent_width);
-                output.push_str(raw);
+                SyntaxKind::Bom | SyntaxKind::Whitespace | SyntaxKind::Newline
+            ) {
+                next_content = Some(token.kind);
             }
+            has_inline_table |= token.kind == SyntaxKind::LeftBrace;
+        }
+        Self {
+            significant,
+            content,
+            has_inline_table,
         }
     }
-    if !matches!(lexed.tokens.last(), Some(token) if token.kind == SyntaxKind::Comment) {
-        trim_horizontal(&mut output);
+
+    fn significant_after(&self, index: usize) -> Option<SyntaxKind> {
+        self.significant[index]
     }
 
-    output
+    fn content_after(&self, index: usize) -> Option<SyntaxKind> {
+        self.content[index]
+    }
 }
 
-fn normalize_inline_table_layout(source: &str, options: &FormatOptions) -> Option<String> {
-    if options.target_version == TomlVersion::V1_0 {
-        return None;
-    }
-    let lexed = lexer::lex(source);
-    let mut replacements = Vec::new();
-    for (opening, closing) in inline_table_pairs(&lexed.tokens) {
-        let tokens = &lexed.tokens[opening..=closing];
-        let has_newline = tokens.iter().any(|token| token.kind == SyntaxKind::Newline);
-        let has_comment = tokens.iter().any(|token| token.kind == SyntaxKind::Comment);
-        let has_multiline_string = tokens.iter().any(|token| {
-            matches!(
-                token.kind,
-                SyntaxKind::BasicString | SyntaxKind::LiteralString
-            ) && source[token.range.clone()].contains(['\n', '\r'])
-        });
-        let start = lexed.tokens[opening].range.start;
-        let end = lexed.tokens[closing].range.end;
-        let base_indent = " ".repeat(
-            delimiter_depth_before(&lexed.tokens, opening) * usize::from(options.indent_width),
-        );
-        if replacements
-            .iter()
-            .any(|(selected_start, selected_end, _)| start < *selected_end && *selected_start < end)
-        {
-            continue;
-        }
-        if has_multiline_string {
-            let replacement = expand_inline_table(
-                &source[start..end],
-                selected_newline(source, options.line_ending),
-                &base_indent,
-                options.indent_width,
-            );
-            if replacement != source[start..end] {
-                replacements.push((start, end, replacement));
-            }
-            continue;
-        }
-        if has_comment {
-            if !has_newline {
-                continue;
-            }
-            let replacement = expand_inline_table(
-                &source[start..end],
-                selected_newline(source, options.line_ending),
-                &base_indent,
-                options.indent_width,
-            );
-            if replacement != source[start..end] {
-                replacements.push((start, end, replacement));
-            }
-            continue;
-        }
-        if !has_newline && current_line_width(&source[..end]) <= usize::from(options.line_width) {
-            continue;
-        }
-
-        let mut flat_source = String::with_capacity(end - start);
-        for token in tokens {
-            if matches!(token.kind, SyntaxKind::Whitespace | SyntaxKind::Newline) {
-                if !flat_source.ends_with(' ') {
-                    flat_source.push(' ');
-                }
-            } else {
-                flat_source.push_str(&source[token.range.clone()]);
-            }
-        }
-        let mut flat_options = options.clone();
-        flat_options.line_width = u16::MAX;
-        let candidate = build_lexical_text(&flat_source, &flat_options);
-        let projected_width = current_line_width(&source[..start]) + candidate.chars().count();
-        if !candidate.contains(['\n', '\r']) {
-            let replacement = if projected_width <= usize::from(options.line_width) {
-                candidate
-            } else {
-                expand_inline_table(
-                    &source[start..end],
-                    selected_newline(source, options.line_ending),
-                    &base_indent,
-                    options.indent_width,
-                )
-            };
-            if replacement != source[start..end] {
-                replacements.push((start, end, replacement));
-            }
-        }
-    }
-
-    if replacements.is_empty() {
-        return None;
-    }
-    replacements.sort_by_key(|(start, _, _)| *start);
-    let mut output = source.to_owned();
-    for (start, end, replacement) in replacements.into_iter().rev() {
-        output.replace_range(start..end, &replacement);
-    }
-    Some(output)
+/// Facts about one TOML 1.1 inline table that decide its layout mode.
+#[derive(Clone, Copy, Debug, Default)]
+struct InlineTableFacts {
+    /// Width of the table rendered on one line with canonical spacing.
+    flat_width: usize,
+    has_comment: bool,
+    has_multiline_string: bool,
+    /// Whether a matching closing brace exists; unmatched braces keep lexical layout.
+    closed: bool,
 }
 
-fn inline_table_pairs(tokens: &[lexer::Token]) -> Vec<(usize, usize)> {
-    let mut openings = Vec::new();
-    let mut pairs = Vec::new();
-    for (index, token) in tokens.iter().enumerate() {
-        match token.kind {
-            SyntaxKind::LeftBrace => openings.push(index),
-            SyntaxKind::RightBrace => {
-                if let Some(opening) = openings.pop() {
-                    pairs.push((opening, index));
-                }
-            }
-            _ => {}
-        }
-    }
-    pairs.sort_by(|left, right| {
-        left.1
-            .saturating_sub(left.0)
-            .cmp(&right.1.saturating_sub(right.0))
-            .then_with(|| left.0.cmp(&right.0))
-    });
-    pairs
+/// Facts for every inline table in opening order, computed by one forward
+/// pass with a stack of open tables so memory is proportional to the number
+/// of tables rather than to the token count.
+#[derive(Debug)]
+struct InlineTablePlan {
+    tables: Vec<InlineTableFacts>,
 }
 
-fn expand_inline_table(source: &str, newline: &str, base_indent: &str, indent_width: u8) -> String {
-    let lexed = lexer::lex(source);
-    let mut output = String::with_capacity(source.len());
-    let mut item_indent = base_indent.to_owned();
-    item_indent.extend(std::iter::repeat_n(' ', usize::from(indent_width)));
-    let mut brace_depth = 0_usize;
-    let mut bracket_depth = 0_usize;
-    let mut skip_outer_layout = false;
-    for (index, token) in lexed.tokens.iter().enumerate() {
-        let raw = &source[token.range.clone()];
-        if skip_outer_layout && matches!(token.kind, SyntaxKind::Whitespace | SyntaxKind::Newline) {
-            continue;
-        }
-        if !matches!(token.kind, SyntaxKind::Whitespace | SyntaxKind::Newline) {
-            skip_outer_layout = false;
-        }
-        match token.kind {
-            SyntaxKind::LeftBrace => {
-                brace_depth += 1;
-                output.push_str(raw);
-                if brace_depth == 1 {
-                    output.push_str(newline);
-                    output.push_str(&item_indent);
-                    skip_outer_layout = true;
-                }
+impl InlineTablePlan {
+    fn analyze(source: &str, tokens: &lexer::TokenTape, lookahead: &TokenLookahead) -> Self {
+        let mut tables = Vec::<InlineTableFacts>::new();
+        let mut open = Vec::<usize>::new();
+        let mut previous_content = None;
+        let mut previous_was_layout = false;
+        for (index, token) in tokens.iter().enumerate() {
+            let raw = &source[token.range.clone()];
+            if token.kind == SyntaxKind::LeftBrace {
+                open.push(tables.len());
+                tables.push(InlineTableFacts::default());
             }
-            SyntaxKind::RightBrace => {
-                if brace_depth == 1 {
-                    trim_horizontal(&mut output);
-                    if !output.ends_with(['\n', '\r']) {
-                        output.push_str(newline);
+            if let Some(&id) = open.last() {
+                let facts = &mut tables[id];
+                facts.flat_width = facts.flat_width.saturating_add(flat_token_width(
+                    raw,
+                    token.kind,
+                    previous_content,
+                    lookahead.content_after(index),
+                    previous_was_layout,
+                ));
+                match token.kind {
+                    SyntaxKind::Comment => facts.has_comment = true,
+                    SyntaxKind::BasicString | SyntaxKind::LiteralString
+                        if raw.contains(['\n', '\r']) =>
+                    {
+                        facts.has_multiline_string = true;
                     }
-                    output.push_str(base_indent);
-                }
-                output.push_str(raw);
-                brace_depth = brace_depth.saturating_sub(1);
-            }
-            SyntaxKind::LeftBracket => {
-                bracket_depth += 1;
-                output.push_str(raw);
-            }
-            SyntaxKind::RightBracket => {
-                bracket_depth = bracket_depth.saturating_sub(1);
-                output.push_str(raw);
-            }
-            SyntaxKind::Comma if brace_depth == 1 && bracket_depth == 0 => {
-                trim_horizontal(&mut output);
-                output.push(',');
-                if significant_after(&lexed.tokens, index) != Some(SyntaxKind::Comment) {
-                    output.push_str(newline);
-                    output.push_str(&item_indent);
-                    skip_outer_layout = true;
+                    _ => {}
                 }
             }
-            SyntaxKind::Newline => {
-                trim_horizontal(&mut output);
-                if !output.ends_with('\n') {
-                    output.push_str(newline);
-                }
-                if brace_depth == 1
-                    && bracket_depth == 0
-                    && content_after(&lexed.tokens, index) != Some(SyntaxKind::RightBrace)
-                {
-                    output.push_str(&item_indent);
-                    skip_outer_layout = true;
+            if token.kind == SyntaxKind::RightBrace {
+                if let Some(id) = open.pop() {
+                    tables[id].closed = true;
+                    let child = tables[id];
+                    if let Some(&parent) = open.last() {
+                        let parent = &mut tables[parent];
+                        parent.flat_width = parent.flat_width.saturating_add(child.flat_width);
+                        parent.has_comment |= child.has_comment;
+                        parent.has_multiline_string |= child.has_multiline_string;
+                    }
                 }
             }
-            _ => output.push_str(raw),
+            if !matches!(
+                token.kind,
+                SyntaxKind::Bom | SyntaxKind::Whitespace | SyntaxKind::Newline
+            ) {
+                previous_content = Some(token.kind);
+            }
+            previous_was_layout =
+                matches!(token.kind, SyntaxKind::Whitespace | SyntaxKind::Newline);
         }
+        Self { tables }
     }
-    output
 }
 
-fn delimiter_depth_before(tokens: &[lexer::Token], index: usize) -> usize {
-    tokens[..index]
-        .iter()
-        .fold(0_usize, |depth, token| match token.kind {
-            SyntaxKind::LeftBracket | SyntaxKind::LeftBrace => depth + 1,
-            SyntaxKind::RightBracket | SyntaxKind::RightBrace => depth.saturating_sub(1),
-            _ => depth,
-        })
+/// The width one token contributes when its inline table is written flat.
+fn flat_token_width(
+    raw: &str,
+    kind: SyntaxKind,
+    previous: Option<SyntaxKind>,
+    next: Option<SyntaxKind>,
+    previous_was_layout: bool,
+) -> usize {
+    match kind {
+        SyntaxKind::Bom => 0,
+        SyntaxKind::Whitespace | SyntaxKind::Newline => usize::from(
+            !previous_was_layout
+                && previous.is_some()
+                && next.is_some()
+                && !whitespace_is_layout(previous, next),
+        ),
+        SyntaxKind::Equals => 3,
+        SyntaxKind::Comma => {
+            1 + usize::from(!matches!(
+                next,
+                None | Some(
+                    SyntaxKind::Comment | SyntaxKind::RightBracket | SyntaxKind::RightBrace
+                )
+            ))
+        }
+        SyntaxKind::Dot | SyntaxKind::LeftBracket | SyntaxKind::RightBracket => 1,
+        SyntaxKind::LeftBrace => {
+            1 + usize::from(!matches!(
+                next,
+                None | Some(SyntaxKind::Comment | SyntaxKind::RightBrace)
+            ))
+        }
+        SyntaxKind::RightBrace => 1 + usize::from(previous != Some(SyntaxKind::LeftBrace)),
+        _ => raw.chars().count(),
+    }
+}
+
+/// The layout chosen for an inline table when its opening brace is written.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TableMode {
+    /// TOML 1.0 targets and unmatched braces keep the ordinary lexical rules.
+    Lexical,
+    /// The table fits on the current line and is written with canonical spacing.
+    Flat,
+    /// One entry per line, indented one level deeper than the table.
+    Expanded,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Frame {
+    Array,
+    Table(TableMode),
+}
+
+struct Renderer<'a> {
+    source: &'a str,
+    tokens: &'a lexer::TokenTape,
+    options: &'a FormatOptions,
+    lookahead: &'a TokenLookahead,
+    plan: Option<&'a InlineTablePlan>,
+    newline: &'static str,
+    output: String,
+    column: usize,
+    line_start: bool,
+    consecutive_newlines: u8,
+    /// Open delimiters, innermost last; its length is the indentation depth.
+    frames: Vec<Frame>,
+    /// Modes of the open inline tables, innermost last.
+    table_modes: Vec<TableMode>,
+    /// Source layout after an expanded table's brace, comma, or newline is
+    /// replaced by the expanded layout until the next content token.
+    skip_layout: bool,
+    previous_significant: Option<SyntaxKind>,
+    previous_content: Option<SyntaxKind>,
+    previous_was_layout: bool,
+    /// Index of the next inline table in `plan`, in opening order.
+    next_table: usize,
+}
+
+impl<'a> Renderer<'a> {
+    fn new(
+        source: &'a str,
+        tokens: &'a lexer::TokenTape,
+        options: &'a FormatOptions,
+        lookahead: &'a TokenLookahead,
+        plan: Option<&'a InlineTablePlan>,
+    ) -> Self {
+        Self {
+            source,
+            tokens,
+            options,
+            lookahead,
+            plan,
+            newline: selected_newline(source, options.line_ending),
+            output: String::with_capacity(source.len()),
+            column: 0,
+            line_start: true,
+            consecutive_newlines: 0,
+            frames: Vec::new(),
+            table_modes: Vec::new(),
+            skip_layout: false,
+            previous_significant: None,
+            previous_content: None,
+            previous_was_layout: false,
+            next_table: 0,
+        }
+    }
+
+    fn render(mut self) -> String {
+        for index in 0..self.tokens.len() {
+            let kind = self.tokens.kind(index);
+            let is_layout = matches!(kind, SyntaxKind::Whitespace | SyntaxKind::Newline);
+            if !is_layout {
+                // A content token ends any layout run that an expanded brace,
+                // comma, or newline asked to skip; the token's own rule may
+                // start a new one.
+                self.consecutive_newlines = 0;
+                self.skip_layout = false;
+            }
+            match self.table_modes.last() {
+                Some(TableMode::Flat) => self.render_flat(index, kind),
+                Some(TableMode::Expanded) => self.render_expanded(index, kind),
+                Some(TableMode::Lexical) | None => self.render_lexical(index, kind),
+            }
+            self.previous_was_layout = is_layout;
+            if !matches!(kind, SyntaxKind::Bom | SyntaxKind::Whitespace) {
+                self.previous_significant = Some(kind);
+            }
+            if !is_layout && kind != SyntaxKind::Bom {
+                self.previous_content = Some(kind);
+            }
+        }
+        if self
+            .tokens
+            .last()
+            .is_none_or(|token| token.kind != SyntaxKind::Comment)
+        {
+            self.trim_horizontal();
+        }
+        self.output
+    }
+
+    /// Top-level, array, and TOML 1.0 inline-table layout.
+    fn render_lexical(&mut self, index: usize, kind: SyntaxKind) {
+        match kind {
+            SyntaxKind::Bom => self.push_raw(index),
+            SyntaxKind::Whitespace => self.write_whitespace(index),
+            SyntaxKind::Newline => self.write_newline(index),
+            SyntaxKind::Comment => self.write_comment(index),
+            SyntaxKind::Equals => self.write_equals(),
+            SyntaxKind::Comma => self.write_comma(index),
+            SyntaxKind::Dot => self.write_dot(),
+            SyntaxKind::LeftBracket => self.open_array(index),
+            SyntaxKind::LeftBrace => self.open_table(index),
+            SyntaxKind::RightBracket => self.close_array(index),
+            SyntaxKind::RightBrace => self.close_table(index),
+            _ => {
+                self.indent_if_needed();
+                self.push_raw(index);
+            }
+        }
+    }
+
+    /// Inside a flat inline table every layout token collapses to canonical
+    /// spacing and nothing wraps: the table was measured to fit.
+    fn render_flat(&mut self, index: usize, kind: SyntaxKind) {
+        match kind {
+            SyntaxKind::Bom => {}
+            SyntaxKind::Whitespace | SyntaxKind::Newline => {
+                let next = self.lookahead.content_after(index);
+                if !self.previous_was_layout
+                    && self.previous_content.is_some()
+                    && next.is_some()
+                    && !whitespace_is_layout(self.previous_content, next)
+                {
+                    self.push(" ");
+                }
+            }
+            SyntaxKind::Equals => self.push(" = "),
+            SyntaxKind::Comma => {
+                self.trim_horizontal();
+                self.push(",");
+                if !matches!(
+                    self.lookahead.content_after(index),
+                    None | Some(
+                        SyntaxKind::Comment | SyntaxKind::RightBracket | SyntaxKind::RightBrace
+                    )
+                ) {
+                    self.push(" ");
+                }
+            }
+            SyntaxKind::Dot => self.write_dot(),
+            SyntaxKind::LeftBracket => {
+                self.frames.push(Frame::Array);
+                self.push_raw(index);
+            }
+            SyntaxKind::LeftBrace => self.open_table(index),
+            SyntaxKind::RightBracket => {
+                if self.frames.last() == Some(&Frame::Array) {
+                    self.frames.pop();
+                }
+                self.trim_horizontal();
+                self.push_raw(index);
+            }
+            SyntaxKind::RightBrace => self.close_table(index),
+            _ => self.push_raw(index),
+        }
+    }
+
+    /// Inside an expanded inline table: entries at brace level are broken
+    /// one per line, blank lines collapse, and nested arrays follow the
+    /// lexical rules at their real columns.
+    fn render_expanded(&mut self, index: usize, kind: SyntaxKind) {
+        let at_brace_level = matches!(self.frames.last(), Some(Frame::Table(_)));
+        match kind {
+            SyntaxKind::Whitespace | SyntaxKind::Newline if self.skip_layout => {}
+            SyntaxKind::Newline => {
+                if self.previous_significant != Some(SyntaxKind::Comment) {
+                    self.trim_horizontal();
+                }
+                if !self.output.ends_with('\n') {
+                    self.push(self.newline);
+                }
+                self.line_start = true;
+                self.skip_layout = at_brace_level;
+            }
+            SyntaxKind::Comma if at_brace_level => {
+                // A comma-first entry (after a comment line) keeps the
+                // table's item indentation instead of landing at column 0.
+                self.trim_horizontal();
+                self.indent_if_needed();
+                self.push(",");
+                if self.lookahead.significant_after(index) != Some(SyntaxKind::Comment) {
+                    self.push(self.newline);
+                    self.line_start = true;
+                    self.skip_layout = true;
+                }
+            }
+            _ => self.render_lexical(index, kind),
+        }
+    }
+
+    fn write_whitespace(&mut self, index: usize) {
+        // Whitespace before a comment is layout; write_comment adds the one
+        // canonical separating space when the comment follows content.
+        if !self.line_start
+            && !whitespace_is_layout(
+                self.previous_significant,
+                self.lookahead.significant_after(index),
+            )
+        {
+            self.push_raw(index);
+        }
+    }
+
+    fn write_newline(&mut self, index: usize) {
+        if self.previous_significant != Some(SyntaxKind::Comment) {
+            self.trim_horizontal();
+        }
+        let newline_limit = if preserves_blank_line(
+            self.previous_content,
+            self.lookahead.content_after(index),
+            self.frames.len(),
+        ) {
+            2
+        } else {
+            1
+        };
+        if self.consecutive_newlines < newline_limit {
+            self.push(self.newline);
+        }
+        self.consecutive_newlines = self.consecutive_newlines.saturating_add(1);
+        self.line_start = true;
+    }
+
+    fn write_comment(&mut self, index: usize) {
+        let starts_line = self.line_start;
+        self.indent_if_needed();
+        if !starts_line && !self.output.ends_with(['\n', '\r', ' ', '\t']) {
+            self.push(" ");
+        }
+        self.push_raw(index);
+    }
+
+    fn write_equals(&mut self) {
+        self.indent_if_needed();
+        self.trim_horizontal();
+        self.push(" = ");
+    }
+
+    fn write_dot(&mut self) {
+        self.trim_horizontal();
+        self.push(".");
+    }
+
+    fn write_comma(&mut self, index: usize) {
+        self.trim_horizontal();
+        self.push(",");
+        let next = self.lookahead.significant_after(index);
+        let next_stays_on_line = !matches!(
+            next,
+            None | Some(
+                SyntaxKind::Newline
+                    | SyntaxKind::Comment
+                    | SyntaxKind::RightBracket
+                    | SyntaxKind::RightBrace
+            )
+        );
+        let line_width = usize::from(self.options.line_width);
+        let wrap_array = self.frames.last() == Some(&Frame::Array)
+            && next_stays_on_line
+            && (self.column >= line_width
+                || (next == Some(SyntaxKind::LeftBrace) && self.next_table_needs_fresh_line()));
+        if wrap_array {
+            self.push(self.newline);
+            self.line_start = true;
+        } else if next_stays_on_line {
+            self.push(" ");
+        }
+    }
+
+    /// An array element that is an inline table keeps its flat layout when it
+    /// fits on a fresh line, rather than being pushed past the width on the
+    /// current line and expanded there.
+    fn next_table_needs_fresh_line(&self) -> bool {
+        let Some(facts) = self
+            .plan
+            .and_then(|plan| plan.tables.get(self.next_table))
+            .filter(|facts| facts.closed && !facts.has_comment && !facts.has_multiline_string)
+        else {
+            return false;
+        };
+        let line_width = usize::from(self.options.line_width);
+        let fresh_column = self.frames.len() * usize::from(self.options.indent_width);
+        self.column + 1 + facts.flat_width > line_width
+            && fresh_column + facts.flat_width <= line_width
+    }
+
+    fn open_array(&mut self, index: usize) {
+        self.indent_if_needed();
+        self.push_raw(index);
+        self.frames.push(Frame::Array);
+    }
+
+    fn close_array(&mut self, index: usize) {
+        if self.frames.last() == Some(&Frame::Array) {
+            self.frames.pop();
+        }
+        self.trim_horizontal();
+        self.indent_if_needed();
+        self.push_raw(index);
+    }
+
+    /// Chooses the table's mode from its measured facts and the real output
+    /// column, then writes its opening brace in that mode.
+    fn open_table(&mut self, index: usize) {
+        let mode = self.choose_table_mode();
+        match mode {
+            TableMode::Lexical => {
+                self.indent_if_needed();
+                self.push_raw(index);
+                if !matches!(
+                    self.lookahead.significant_after(index),
+                    None | Some(SyntaxKind::Newline | SyntaxKind::Comment | SyntaxKind::RightBrace)
+                ) {
+                    self.push(" ");
+                }
+            }
+            TableMode::Flat => {
+                self.indent_if_needed();
+                self.push_raw(index);
+                if !matches!(
+                    self.lookahead.content_after(index),
+                    None | Some(SyntaxKind::Comment | SyntaxKind::RightBrace)
+                ) {
+                    self.push(" ");
+                }
+            }
+            TableMode::Expanded => {
+                self.indent_if_needed();
+                self.push_raw(index);
+                self.push(self.newline);
+                self.line_start = true;
+                self.skip_layout = true;
+            }
+        }
+        self.frames.push(Frame::Table(mode));
+        self.table_modes.push(mode);
+    }
+
+    fn choose_table_mode(&mut self) -> TableMode {
+        let Some(plan) = self.plan else {
+            return TableMode::Lexical;
+        };
+        let facts = plan.tables.get(self.next_table).copied();
+        self.next_table += 1;
+        let Some(facts) = facts.filter(|facts| facts.closed) else {
+            return TableMode::Lexical;
+        };
+        if self.table_modes.last() == Some(&TableMode::Flat) {
+            return TableMode::Flat;
+        }
+        if facts.has_comment || facts.has_multiline_string {
+            return TableMode::Expanded;
+        }
+        // The column already includes any indentation written for this line.
+        let column = if self.line_start {
+            self.frames.len() * usize::from(self.options.indent_width)
+        } else {
+            self.column
+        };
+        if column.saturating_add(facts.flat_width) <= usize::from(self.options.line_width) {
+            TableMode::Flat
+        } else {
+            TableMode::Expanded
+        }
+    }
+
+    fn close_table(&mut self, index: usize) {
+        let mode = match self.frames.last() {
+            Some(Frame::Table(mode)) => {
+                let mode = *mode;
+                self.frames.pop();
+                self.table_modes.pop();
+                mode
+            }
+            _ => TableMode::Lexical,
+        };
+        match mode {
+            TableMode::Lexical => {
+                self.trim_horizontal();
+                if !self.line_start && !self.output.ends_with('{') {
+                    self.push(" ");
+                }
+                self.indent_if_needed();
+                self.push_raw(index);
+            }
+            TableMode::Flat => {
+                self.trim_horizontal();
+                if self.previous_content != Some(SyntaxKind::LeftBrace) {
+                    self.push(" ");
+                }
+                self.push_raw(index);
+            }
+            TableMode::Expanded => {
+                self.trim_horizontal();
+                if !self.output.ends_with('\n') {
+                    self.push(self.newline);
+                }
+                self.line_start = true;
+                self.indent_if_needed();
+                self.push_raw(index);
+            }
+        }
+    }
+
+    fn indent_if_needed(&mut self) {
+        if self.line_start {
+            let columns = self.frames.len() * usize::from(self.options.indent_width);
+            self.output.extend(std::iter::repeat_n(' ', columns));
+            self.column += columns;
+            self.line_start = false;
+        }
+    }
+
+    fn push_raw(&mut self, index: usize) {
+        let kind = self.tokens.kind(index);
+        let raw = &self.source[self.tokens.range(index)];
+        self.output.push_str(raw);
+        match kind {
+            SyntaxKind::Newline => self.column = 0,
+            // Only string tokens can span lines; every other token advances
+            // the column by its own character count.
+            SyntaxKind::BasicString | SyntaxKind::LiteralString => {
+                self.column = match raw.rsplit_once('\n') {
+                    Some((_, tail)) => tail.chars().count(),
+                    None => self.column + raw.chars().count(),
+                };
+            }
+            _ => self.column += raw.chars().count(),
+        }
+    }
+
+    fn push(&mut self, text: &str) {
+        self.output.push_str(text);
+        self.column = match text.rsplit_once('\n') {
+            Some((_, tail)) => tail.chars().count(),
+            None => self.column + text.chars().count(),
+        };
+    }
+
+    fn trim_horizontal(&mut self) {
+        let trimmed = self.output.trim_end_matches([' ', '\t']).len();
+        let removed = self.output.len() - trimmed;
+        self.output.truncate(trimmed);
+        self.column = self.column.saturating_sub(removed);
+    }
 }
 
 fn unsafe_diagnostics(document: &Document, target_version: TomlVersion) -> Vec<Diagnostic> {
@@ -459,70 +771,9 @@ fn unsafe_diagnostics(document: &Document, target_version: TomlVersion) -> Vec<D
         .unwrap_or(document)
         .diagnostics()
         .iter()
-        .filter(|diagnostic| {
-            let code = diagnostic.code().as_str();
-            code.starts_with("parse.")
-                || code.starts_with("semantic.")
-                || code.starts_with("version.")
-        })
+        .filter(|diagnostic| diagnostic.code().refuses_formatting())
         .cloned()
         .collect()
-}
-
-fn write_comma(
-    output: &mut String,
-    line_start: &mut bool,
-    delimiters: &[SyntaxKind],
-    next: Option<SyntaxKind>,
-    newline: &str,
-    line_width: u16,
-) {
-    trim_horizontal(output);
-    output.push(',');
-    let next_stays_on_line = !matches!(
-        next,
-        None | Some(
-            SyntaxKind::Newline
-                | SyntaxKind::Comment
-                | SyntaxKind::RightBracket
-                | SyntaxKind::RightBrace
-        )
-    );
-    let wrap_array = delimiters.last() == Some(&SyntaxKind::LeftBracket)
-        && next_stays_on_line
-        && current_line_width(output) >= usize::from(line_width);
-    if wrap_array {
-        output.push_str(newline);
-        *line_start = true;
-    } else if next_stays_on_line {
-        output.push(' ');
-    }
-}
-
-fn close_delimiter(
-    output: &mut String,
-    line_start: &mut bool,
-    depth: &mut usize,
-    delimiters: &mut Vec<SyntaxKind>,
-    closing: SyntaxKind,
-    raw: &str,
-    indent_width: u8,
-) {
-    *depth = depth.saturating_sub(1);
-    let expected = match closing {
-        SyntaxKind::RightBracket => SyntaxKind::LeftBracket,
-        SyntaxKind::RightBrace => SyntaxKind::LeftBrace,
-        _ => unreachable!(),
-    };
-    if delimiters.last() == Some(&expected) {
-        delimiters.pop();
-    }
-    trim_horizontal(output);
-    if closing == SyntaxKind::RightBrace && !*line_start && !output.ends_with('{') {
-        output.push(' ');
-    }
-    indent_if_needed(output, line_start, *depth, indent_width);
-    output.push_str(raw);
 }
 
 fn finish_format(source: &str, output: String) -> FormatOutcome {
@@ -545,52 +796,14 @@ fn selected_newline(source: &str, option: LineEnding) -> &'static str {
     }
 }
 
-fn significant_before(tokens: &[lexer::Token], index: usize) -> Option<SyntaxKind> {
-    tokens[..index]
-        .iter()
-        .rev()
-        .find(|token| !matches!(token.kind, SyntaxKind::Bom | SyntaxKind::Whitespace))
-        .map(|token| token.kind)
-}
-
-fn significant_after(tokens: &[lexer::Token], index: usize) -> Option<SyntaxKind> {
-    tokens[index + 1..]
-        .iter()
-        .find(|token| !matches!(token.kind, SyntaxKind::Bom | SyntaxKind::Whitespace))
-        .map(|token| token.kind)
-}
-
-fn preserves_blank_line(tokens: &[lexer::Token], index: usize, depth: usize) -> bool {
-    let previous = content_before(tokens, index);
-    let next = content_after(tokens, index);
+fn preserves_blank_line(
+    previous: Option<SyntaxKind>,
+    next: Option<SyntaxKind>,
+    depth: usize,
+) -> bool {
     previous == Some(SyntaxKind::Comment)
         || next == Some(SyntaxKind::Comment)
         || (depth == 0 && next == Some(SyntaxKind::LeftBracket))
-}
-
-fn content_before(tokens: &[lexer::Token], index: usize) -> Option<SyntaxKind> {
-    tokens[..index]
-        .iter()
-        .rev()
-        .find(|token| {
-            !matches!(
-                token.kind,
-                SyntaxKind::Bom | SyntaxKind::Whitespace | SyntaxKind::Newline
-            )
-        })
-        .map(|token| token.kind)
-}
-
-fn content_after(tokens: &[lexer::Token], index: usize) -> Option<SyntaxKind> {
-    tokens[index + 1..]
-        .iter()
-        .find(|token| {
-            !matches!(
-                token.kind,
-                SyntaxKind::Bom | SyntaxKind::Whitespace | SyntaxKind::Newline
-            )
-        })
-        .map(|token| token.kind)
 }
 
 fn whitespace_is_layout(previous: Option<SyntaxKind>, next: Option<SyntaxKind>) -> bool {
@@ -614,23 +827,4 @@ fn whitespace_is_layout(previous: Option<SyntaxKind>, next: Option<SyntaxKind>) 
                 | SyntaxKind::Comment
         )
     )
-}
-
-fn indent_if_needed(output: &mut String, line_start: &mut bool, depth: usize, width: u8) {
-    if *line_start {
-        output.extend(std::iter::repeat_n(' ', depth * usize::from(width)));
-        *line_start = false;
-    }
-}
-
-fn trim_horizontal(output: &mut String) {
-    output.truncate(output.trim_end_matches([' ', '\t']).len());
-}
-
-fn current_line_width(output: &str) -> usize {
-    output
-        .rsplit_once('\n')
-        .map_or(output, |(_, line)| line)
-        .chars()
-        .count()
 }

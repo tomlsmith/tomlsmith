@@ -1,6 +1,6 @@
 use crate::{Diagnostic, DiagnosticCode, TextRange};
 
-use super::{SyntaxKind, Token};
+use super::{SyntaxKind, TokenTape};
 
 pub(crate) enum Event {
     Start(SyntaxKind),
@@ -13,7 +13,7 @@ pub(crate) struct Parsed {
     pub(crate) diagnostics: Vec<Diagnostic>,
 }
 
-pub(crate) fn parse(tokens: &[Token]) -> Parsed {
+pub(crate) fn parse(tokens: &TokenTape) -> Parsed {
     Parser {
         tokens,
         position: 0,
@@ -25,7 +25,7 @@ pub(crate) fn parse(tokens: &[Token]) -> Parsed {
 }
 
 struct Parser<'tokens> {
-    tokens: &'tokens [Token],
+    tokens: &'tokens TokenTape,
     position: usize,
     collection_depth: usize,
     events: Vec<Event>,
@@ -389,9 +389,12 @@ impl Parser<'_> {
     }
 
     fn nth(&self, lookahead: usize) -> SyntaxKind {
-        self.tokens
-            .get(self.position + lookahead)
-            .map_or(SyntaxKind::Invalid, |token| token.kind)
+        let index = self.position + lookahead;
+        if index < self.tokens.len() {
+            self.tokens.kind(index)
+        } else {
+            SyntaxKind::Invalid
+        }
     }
 
     fn current_offset(&self) -> u32 {

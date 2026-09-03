@@ -90,6 +90,16 @@ impl DiagnosticCode {
     pub const fn as_str(self) -> &'static str {
         self.0
     }
+
+    /// Whether a diagnostic with this code makes a snapshot unsafe to rewrite.
+    ///
+    /// Parse, version, and semantic problems all refuse formatting; the same
+    /// predicate decides refusal and whether a speculative render is skipped,
+    /// so the two can never disagree.
+    pub(crate) fn refuses_formatting(self) -> bool {
+        let code = self.0;
+        code.starts_with("parse.") || code.starts_with("semantic.") || code.starts_with("version.")
+    }
 }
 
 impl fmt::Debug for DiagnosticCode {

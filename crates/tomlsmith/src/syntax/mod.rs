@@ -11,13 +11,13 @@ use crate::Diagnostic;
 
 pub use kind::SyntaxKind;
 pub(crate) use kind::TomlLanguage;
-pub(crate) use lexer::Token;
+pub(crate) use lexer::TokenTape;
 pub use view::{SyntaxElement, SyntaxNode, SyntaxToken};
 
 pub(crate) struct Parse {
     pub(crate) green: GreenNode,
     pub(crate) diagnostics: Vec<Diagnostic>,
-    pub(crate) tokens: Vec<Token>,
+    pub(crate) tokens: TokenTape,
 }
 
 pub(crate) fn parse(source: &str) -> Parse {

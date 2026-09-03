@@ -252,6 +252,113 @@ fn formatting_refuses_syntax_not_supported_by_the_target_version() {
 }
 
 #[test]
+fn arrays_inside_expanded_inline_tables_wrap_at_their_real_columns() {
+    // The table does not fit at width 50, so it expands; its array is then
+    // measured on the expanded line, where it fits without wrapping.
+    let source = "wide = [\n  { name = \"alpha\", version = \"1.0.0\", features = [\"one\", \"two\", \"three\"] },\n]\n";
+    let expected = "wide = [\n  {\n    name = \"alpha\",\n    version = \"1.0.0\",\n    features = [\"one\", \"two\", \"three\"]\n  },\n]\n";
+    let options = FormatOptions {
+        line_width: 50,
+        ..FormatOptions::default()
+    };
+
+    let FormatOutcome::Changed { text, .. } = Document::parse(source).format_with(&options) else {
+        panic!("the inline table should expand");
+    };
+
+    assert_eq!(text.as_ref(), expected);
+    assert!(matches!(
+        Document::parse(text).format_with(&options),
+        FormatOutcome::Unchanged
+    ));
+}
+
+/// Runs `body` on a thread with a deliberately small stack so that any
+/// recursion over token-level nesting overflows deterministically on every
+/// platform instead of depending on the host's default stack size.
+fn on_small_stack(body: impl FnOnce() + Send + 'static) {
+    std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(body)
+        .expect("spawn a small-stack test thread")
+        .join()
+        .expect("the formatter must not overflow a small stack");
+}
+
+#[test]
+fn pathological_nesting_is_refused_without_rendering() {
+    // Deeper than the parser's collection limit: the document is refused, and
+    // neither the guarded nor the one-shot path may recurse or render the
+    // quadratic expanded layout before refusing.
+    on_small_stack(|| {
+        let depth = 20_000;
+        let source = format!("a = {}1{}\n", "{ b = ".repeat(depth), " }".repeat(depth));
+        let options = FormatOptions {
+            line_width: 20,
+            ..FormatOptions::default()
+        };
+
+        let document = Document::parse(source.as_str());
+        assert!(matches!(
+            document.format_with(&options),
+            FormatOutcome::Refused { .. }
+        ));
+        let (_, outcome) = Document::parse_and_format_with(source, TomlVersion::V1_1, &options);
+        assert!(matches!(outcome, FormatOutcome::Refused { .. }));
+    });
+}
+
+#[test]
+fn nesting_within_the_supported_limit_expands_iteratively() {
+    on_small_stack(|| {
+        let depth = 256;
+        let source = format!("a = {}1{}\n", "{ b = ".repeat(depth), " }".repeat(depth));
+        let options = FormatOptions {
+            line_width: 20,
+            ..FormatOptions::default()
+        };
+
+        let FormatOutcome::Changed { text, .. } =
+            Document::parse(source.as_str()).format_with(&options)
+        else {
+            panic!("a deeply nested but valid table should be expanded");
+        };
+        assert!(text.starts_with("a = {\n  b = {\n"));
+        assert!(text.ends_with("  }\n}\n"));
+        assert!(matches!(
+            Document::parse(text).format_with(&options),
+            FormatOutcome::Unchanged
+        ));
+    });
+}
+
+#[test]
+fn one_shot_formatting_matches_guarded_formatting() {
+    let sources = [
+        "a=1\n",
+        "a = { b = 1, c = [1, 2] }\n",
+        "a = {\n  # note\n  b = 1 }\n",
+        "a = 1\na = 2\n",
+        "title = \"unterminated\n",
+        "value = {{{ 1 }}}\n",
+    ];
+    for version in [TomlVersion::V1_0, TomlVersion::V1_1] {
+        for target in [TomlVersion::V1_0, TomlVersion::V1_1] {
+            let options = FormatOptions {
+                target_version: target,
+                line_width: 24,
+                ..FormatOptions::default()
+            };
+            for source in sources {
+                let guarded = Document::parse_as(source, version).format_with(&options);
+                let (_, one_shot) = Document::parse_and_format_with(source, version, &options);
+                assert_eq!(one_shot, guarded, "{source:?} {version:?} -> {target:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn line_width_wraps_arrays_at_safe_comma_boundaries() {
     let document = Document::parse("values=[11111,22222]\n");
     let options = FormatOptions {
