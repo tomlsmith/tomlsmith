@@ -242,7 +242,7 @@ jobs:
 
       - name: Restore cached comparison release CLI
         id: performance-base-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/tomlsmith-performance-base/release/tomlsmith
           key: performance-base-${{ runner.os }}-${{ steps.performance-base.outputs.sha }}-${{ hashFiles('rust-toolchain.toml') }}
