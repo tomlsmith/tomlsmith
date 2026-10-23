@@ -5,7 +5,8 @@ use crate::{Diagnostic, Document, SyntaxKind, TextRange, TomlVersion, syntax::le
 /// How formatted output chooses newline bytes.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum LineEnding {
-    /// Use the first newline style found in the source, falling back to LF.
+    /// Use the first physical newline style in the source, including inside
+    /// strings, falling back to LF. Literal spelling remains unchanged.
     #[default]
     Preserve,
     /// Write line feed (`\n`) newlines.
@@ -791,7 +792,13 @@ fn finish_format(source: &str, output: String) -> FormatOutcome {
 fn selected_newline(source: &str, option: LineEnding) -> &'static str {
     match option {
         LineEnding::CrLf => "\r\n",
-        LineEnding::Preserve if source.contains("\r\n") => "\r\n",
+        LineEnding::Preserve
+            if source
+                .find('\n')
+                .is_some_and(|offset| source[..offset].ends_with('\r')) =>
+        {
+            "\r\n"
+        }
         LineEnding::Lf | LineEnding::Preserve => "\n",
     }
 }

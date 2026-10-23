@@ -559,25 +559,44 @@ impl Session {
 
 /// Byte-offset ↔ line lookup table for one document snapshot.
 ///
-/// Built once per snapshot in O(n) so position conversions stay O(log n)
-/// per lookup plus the width of the addressed line, instead of rescanning
-/// the whole document prefix on every call.
+/// Built once per snapshot in O(n). Sparse checkpoints after non-ASCII
+/// characters let both coordinate conversions use binary search without
+/// rescanning line prefixes, even for very long single-line arrays.
 #[derive(Clone)]
 struct LineIndex {
     /// Byte offset of the first character of every line.
     line_starts: Vec<u32>,
+    /// Absolute byte/UTF-16 offsets immediately after non-ASCII characters.
+    /// ASCII runs need no storage: their byte and UTF-16 widths are equal.
+    utf16_checkpoints: Vec<Utf16Checkpoint>,
+}
+
+#[derive(Clone, Copy)]
+struct Utf16Checkpoint {
+    byte: u32,
+    utf16: u32,
 }
 
 impl LineIndex {
     fn new(text: &str) -> Self {
         let mut line_starts = vec![0_u32];
-        line_starts.extend(
-            text.bytes()
-                .enumerate()
-                .filter(|(_, byte)| *byte == b'\n')
-                .map(|(offset, _)| saturating_u32(offset + 1)),
-        );
-        Self { line_starts }
+        let mut utf16_checkpoints = Vec::new();
+        let mut utf16_offset = 0_usize;
+        for (offset, character) in text.char_indices() {
+            utf16_offset += character.len_utf16();
+            if character == '\n' {
+                line_starts.push(saturating_u32(offset + 1));
+            } else if !character.is_ascii() {
+                utf16_checkpoints.push(Utf16Checkpoint {
+                    byte: saturating_u32(offset + character.len_utf8()),
+                    utf16: saturating_u32(utf16_offset),
+                });
+            }
+        }
+        Self {
+            line_starts,
+            utf16_checkpoints,
+        }
     }
 
     fn line_of(&self, offset: u32) -> usize {
@@ -588,6 +607,28 @@ impl LineIndex {
 
     fn line_start(&self, line: usize) -> Option<u32> {
         self.line_starts.get(line).copied()
+    }
+
+    fn utf16_offset(&self, byte: u32) -> u32 {
+        let previous = self
+            .utf16_checkpoints
+            .partition_point(|checkpoint| checkpoint.byte <= byte)
+            .checked_sub(1)
+            .map(|index| self.utf16_checkpoints[index]);
+        previous.map_or(byte, |checkpoint| {
+            checkpoint.utf16 + (byte - checkpoint.byte)
+        })
+    }
+
+    fn byte_offset(&self, utf16: u32) -> u32 {
+        let previous = self
+            .utf16_checkpoints
+            .partition_point(|checkpoint| checkpoint.utf16 <= utf16)
+            .checked_sub(1)
+            .map(|index| self.utf16_checkpoints[index]);
+        previous.map_or(utf16, |checkpoint| {
+            checkpoint.byte + (utf16 - checkpoint.utf16)
+        })
     }
 }
 
@@ -1537,11 +1578,9 @@ fn byte_to_position(text: &str, index: &LineIndex, byte_offset: u32) -> Position
         .line_start(line)
         .map_or(0, |start| start as usize)
         .min(text.len());
-    let character = text[line_start..offset].encode_utf16().count();
-    Position::new(
-        u32::try_from(line).unwrap_or(u32::MAX),
-        u32::try_from(character).unwrap_or(u32::MAX),
-    )
+    let character =
+        index.utf16_offset(saturating_u32(offset)) - index.utf16_offset(saturating_u32(line_start));
+    Position::new(u32::try_from(line).unwrap_or(u32::MAX), character)
 }
 
 /// Converts an LSP position into a byte offset, clamping out-of-range
@@ -1560,17 +1599,17 @@ fn position_to_byte(text: &str, index: &LineIndex, position: Position) -> u32 {
     if line_end > line_start && text.as_bytes()[line_end - 1] == b'\r' {
         line_end -= 1;
     }
-    let line = &text[line_start..line_end];
-    let requested_character = usize::try_from(position.character).unwrap_or(usize::MAX);
-    let mut utf16_offset = 0_usize;
-
-    for (byte_offset, character) in line.char_indices() {
-        if utf16_offset >= requested_character {
-            return saturating_u32(line_start + byte_offset);
-        }
-        utf16_offset += character.len_utf16();
+    let requested_offset = index
+        .utf16_offset(saturating_u32(line_start))
+        .saturating_add(position.character)
+        .min(index.utf16_offset(saturating_u32(line_end)));
+    let mut byte_offset = (index.byte_offset(requested_offset) as usize).min(line_end);
+    // Preserve the existing rounding-up behavior for positions inside a
+    // surrogate pair, which have no exact UTF-8 boundary.
+    while !text.is_char_boundary(byte_offset) {
+        byte_offset += 1;
     }
-    saturating_u32(line_end)
+    saturating_u32(byte_offset)
 }
 
 fn capabilities() -> ServerCapabilities {

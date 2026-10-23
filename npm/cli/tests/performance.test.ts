@@ -529,6 +529,36 @@ function measureLargeArray(
 }
 
 test(
+  "checking repeated array tables scales below the quadratic regression waterline",
+  () => {
+    // Lockfiles repeat the same table and field paths in independent scopes.
+    // Distinct table names cannot expose a linear scan of prior scope owners.
+    const entry = "[[package]]\n" + Array.from(
+      { length: 8 },
+      (_, index) => `field_${index} = "value"\n`,
+    ).join("");
+    const small = entry.repeat(16_384);
+    const large = entry.repeat(131_072);
+    const measure = (source: string): number => {
+      const result = runCli(headBinaryPath, ["check", "-"], source);
+      expect(result.stdout).toBe("");
+      return result.elapsed;
+    };
+    const ratio = measureGrowth(
+      "check repeated AoT with shared field paths (8x input)",
+      () => measure(small),
+      () => measure(large),
+      16,
+    );
+    expect(
+      ratio,
+      `checking 8x more repeated array tables took ${ratio.toFixed(1)}x longer`,
+    ).toBeLessThan(16);
+  },
+  120_000,
+);
+
+test(
   "checking independent array tables scales below the quadratic regression waterline",
   () => {
     const ratio = measureGrowth(

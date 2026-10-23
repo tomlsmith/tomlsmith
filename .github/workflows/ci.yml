@@ -286,6 +286,12 @@ jobs:
           set -euo pipefail
           pnpm npm:performance 2>&1 | tee target/performance/vitest.log
 
+      - name: Guard long-line LSP semantic token conversion
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm npm:lsp:performance 2>&1 | tee target/performance/lsp-vitest.log
+
       - name: Compare instruction counts with the comparison SHA
         shell: bash
         env:

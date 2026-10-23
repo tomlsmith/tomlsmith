@@ -33,7 +33,7 @@ The core follows these contracts:
 - public source ranges are UTF-8 byte offsets;
 - TOML version selection is explicit and formatting never upgrades a version;
 - semantic conflicts retain every declaration instead of choosing a winner;
-- formatting preserves literal and key spelling and refuses unsafe rewrites;
+- formatting preserves literal and key spelling and refuses unsafe rewrites; `LineEnding::Preserve` chooses the first physical newline in the source (including newlines inside strings), or LF when none exists, while literal bytes remain unchanged;
 - a trailing comma inside a TOML 1.1 inline table is layout, not an expansion hint: the table is written on one line whenever it fits and the comma is kept in place (`{ a = 1, }`), so a formatter run never turns a fitting table into a multi-line one because of punctuation the author left behind. Tools that treat a trailing comma as a request for one entry per line (tombi's magic trailing comma) make a policy choice that TomlSmith deliberately does not make, because the only facts that expand a table are its width at the real output column, a comment, or a multi-line string;
 - collection and key/table nesting are bounded at 256 levels while the CST remains lossless; the supported depth exceeds the specification's suggested minimum of 100;
 - old snapshot results can be discarded using revision information; and
@@ -45,7 +45,7 @@ Performance is an architectural invariant, not an after-the-fact benchmark targe
 
 The current core follows these complexity contracts:
 
-- check's base traversal is linear in tokens. Semantic paths materialize their bounded prefixes; active array-of-table lookup and activation are `O(path depth)` rather than `O(number of prior array tables)`; implicit-parent bookkeeping for a header takes one trie walk rather than one lookup per prefix; and final diagnostic ordering is `O(diagnostics log diagnostics)`;
+- check's base traversal is linear in tokens. Semantic paths materialize their bounded prefixes; active array-of-table lookup and activation are `O(path depth)` rather than `O(number of prior array tables)`; path ownership stores a single scope inline and upgrades to a set for repeated array-table elements, so namespace checks never scan all earlier owners of the same path; implicit-parent bookkeeping for a header takes one trie walk rather than one lookup per prefix; and final diagnostic ordering is `O(diagnostics log diagnostics)`;
 - formatting is exactly three linear passes over one token tape, with no recursion and no re-lexing of produced text: a reverse pass records each token's next significant and content neighbours, a forward pass computes the canonical flat width and comment/multiline facts of every TOML 1.1 inline table with a stack (memory proportional to the number of tables, not tokens), and one forward render pass writes the output while an explicit delimiter-frame stack carries the layout mode chosen for each inline table at its opening brace;
 - an inline table's mode is decided once, when its opening brace is written, from its precomputed flat width and the real output column; arrays wrap at real output columns; an array element that is an inline table starts a fresh line when it fits flat there but not on the current line. Nesting depth increases the produced indentation bytes but never the number of passes;
 - formatter time is bounded by input tokens plus produced bytes; transient memory is a few bytes per token plus one entry per inline table plus the single output buffer;

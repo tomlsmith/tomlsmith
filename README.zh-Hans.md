@@ -46,6 +46,8 @@ tomlsmith parse Cargo.toml
 tomlsmith --toml-version 1.0 check Cargo.toml
 ```
 
+`fmt` 默认跟随源码中第一个实际换行的样式（包括多行字符串内部的换行），没有换行时使用 LF；字符串字面量的原始字节保持不变。可以用 `--line-ending lf` 或 `--line-ending crlf` 显式指定排版换行。
+
 库、CLI、LSP 与 VS Code 扩展现在都默认使用 TOML 1.1。只有文件必须由仅支持 1.0 的消费端读取时，才需要显式选择 TOML 1.0；完整矩阵和接入规则见 [TOML 版本策略](docs/version-policy.md)。
 
 所有命令都可以读取文件路径或使用 `-` 从标准输入读取。运行 `tomlsmith --help` 可列出全部命令与参数。仓库仍维护面向 Node.js 使用者的可选 npm wrapper，但 CLI 和其他 TomlSmith 仓库都不依赖它。

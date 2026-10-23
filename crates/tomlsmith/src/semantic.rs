@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt,
     sync::{Arc, OnceLock},
 };
@@ -75,6 +75,52 @@ impl std::hash::Hasher for FastHasher {
 }
 
 type FastMap<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<FastHasher>>;
+type FastSet<K> = HashSet<K, std::hash::BuildHasherDefault<FastHasher>>;
+
+/// Most paths belong to one scope, so store that scope without allocating.
+/// Repeated array tables share paths across many scopes; use a set as soon as
+/// a second owner appears so membership never scans prior array elements.
+#[derive(Default)]
+enum ScopeOwners {
+    #[default]
+    Empty,
+    One(u32),
+    Many(FastSet<u32>),
+}
+
+impl ScopeOwners {
+    fn contains(&self, scope: u32) -> bool {
+        match self {
+            Self::Empty => false,
+            Self::One(owner) => *owner == scope,
+            Self::Many(owners) => owners.contains(&scope),
+        }
+    }
+
+    fn insert(&mut self, scope: u32) {
+        match self {
+            Self::Empty => *self = Self::One(scope),
+            Self::One(owner) if *owner != scope => {
+                *self = Self::Many([*owner, scope].into_iter().collect());
+            }
+            Self::One(_) => {}
+            Self::Many(owners) => {
+                owners.insert(scope);
+            }
+        }
+    }
+
+    fn remove(&mut self, scope: u32) -> bool {
+        match self {
+            Self::One(owner) if *owner == scope => {
+                *self = Self::Empty;
+                true
+            }
+            Self::Many(owners) => owners.remove(&scope),
+            Self::Empty | Self::One(_) => false,
+        }
+    }
+}
 
 /// A decoded sequence of TOML key segments.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -549,12 +595,11 @@ struct LoweringState<'source> {
     current_scope: u32,
     next_scope: u32,
     active_array_tables: ArrayScopeIndex,
-    // Path-keyed indexes so per-statement namespace checks stay O(depth)
-    // instead of rescanning every prior declaration. The scope lists are
-    // almost always a single element.
-    explicit_tables: FastMap<Vec<Arc<str>>, Vec<u32>>,
-    implicit_table_paths: FastMap<Vec<Arc<str>>, Vec<u32>>,
-    declared_paths: FastMap<Vec<Arc<str>>, Vec<u32>>,
+    // Path-keyed indexes keep namespace checks O(depth); scope membership
+    // stays constant-time even when array elements repeat the same paths.
+    explicit_tables: FastMap<Vec<Arc<str>>, ScopeOwners>,
+    implicit_table_paths: FastMap<Vec<Arc<str>>, ScopeOwners>,
+    declared_paths: FastMap<Vec<Arc<str>>, ScopeOwners>,
     declarations: Vec<Declaration>,
     namespace_diagnostics: Vec<Diagnostic>,
 }
@@ -601,7 +646,7 @@ impl<'source> LoweringState<'source> {
         self.explicit_tables
             .entry(self.current_table.clone())
             .or_default()
-            .push(scope);
+            .insert(scope);
         Self::record_declared_path(&mut self.declared_paths, &self.current_table, scope);
         self.declarations.push(Declaration {
             key: KeyPath::new(self.current_table.clone()),
@@ -629,7 +674,7 @@ impl<'source> LoweringState<'source> {
         if self
             .implicit_table_paths
             .get(&self.current_table)
-            .is_some_and(|owners| owners.contains(&scope))
+            .is_some_and(|owners| owners.contains(scope))
         {
             self.namespace_diagnostics.push(Diagnostic::error(
                 DiagnosticCode::CONFLICTING_KEY,
@@ -708,27 +753,20 @@ impl<'source> LoweringState<'source> {
     }
 
     fn promote_implicit_table(&mut self) -> bool {
-        let Some(owners) = self.implicit_table_paths.get_mut(&self.current_table) else {
-            return false;
-        };
-        let Some(index) = owners.iter().position(|owner| *owner == self.current_scope) else {
-            return false;
-        };
-        owners.swap_remove(index);
-        true
+        self.implicit_table_paths
+            .get_mut(&self.current_table)
+            .is_some_and(|owners| owners.remove(self.current_scope))
     }
 
     fn record_declared_path(
-        declared_paths: &mut FastMap<Vec<Arc<str>>, Vec<u32>>,
+        declared_paths: &mut FastMap<Vec<Arc<str>>, ScopeOwners>,
         path: &[Arc<str>],
         scope: u32,
     ) {
         if let Some(owners) = declared_paths.get_mut(path) {
-            if !owners.contains(&scope) {
-                owners.push(scope);
-            }
+            owners.insert(scope);
         } else {
-            declared_paths.insert(path.to_vec(), vec![scope]);
+            declared_paths.insert(path.to_vec(), ScopeOwners::One(scope));
         }
     }
 
@@ -742,16 +780,16 @@ impl<'source> LoweringState<'source> {
             let explicitly_known = self
                 .declared_paths
                 .get(prefix)
-                .is_some_and(|owners| owners.contains(&scope));
+                .is_some_and(|owners| owners.contains(scope));
             let already_implicit = self
                 .implicit_table_paths
                 .get(prefix)
-                .is_some_and(|owners| owners.contains(&scope));
+                .is_some_and(|owners| owners.contains(scope));
             if !explicitly_known && !already_implicit {
                 self.implicit_table_paths
                     .entry(prefix.to_vec())
                     .or_default()
-                    .push(scope);
+                    .insert(scope);
             }
         }
     }
@@ -779,7 +817,7 @@ impl<'source> LoweringState<'source> {
         let crosses_header = (self.current_table.len() + 1..key.len()).any(|prefix_length| {
             self.explicit_tables
                 .get(&key[..prefix_length])
-                .is_some_and(|owners| owners.contains(&declaration.scope))
+                .is_some_and(|owners| owners.contains(declaration.scope))
         });
         if crosses_header {
             self.namespace_diagnostics.push(Diagnostic::error(

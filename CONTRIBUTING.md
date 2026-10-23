@@ -33,9 +33,12 @@ pnpm npm:typecheck
 pnpm npm:check
 pnpm npm:test
 pnpm npm:performance
+pnpm npm:lsp:performance
 ```
 
 `pnpm npm:package` builds a release Rust binary, stages it in the current platform package, builds the TypeScript launcher, validates version invariants, and writes installable tarballs under `npm/dist`.
+
+`pnpm npm:test` also builds the debug LSP and checks Unicode token coordinates and incremental edits through its real stdio interface. `pnpm npm:lsp:performance` builds the release LSP and separately guards semantic-token growth for long ASCII and Unicode lines; the CI performance job runs it after the CLI growth checks. Both suites use Vitest, and timing-sensitive LSP tests are excluded from the ordinary cross-platform correctness run.
 
 `pnpm npm:performance` builds and stages the release CLI, then runs only the Vitest performance suite. Keep it separate from `npm:test`: correctness runs across all supported CI operating systems, while timing-sensitive checks run in their own Ubuntu job without competing with those jobs on the same runner. The suite's growth waterlines subtract the measured process start-up floor and block; its head-versus-comparison-SHA ratios (the merged base for pull requests) are advisory above 1.35x on shared runners and block only above 3x unless `TOMLSMITH_PERFORMANCE_BUDGET_MODE=strict`. Output content is asserted only for the head binary, so a deliberate layout change never fails the performance job. The same job installs Valgrind and runs `tools/performance/callgrind-compare.sh` to compare instruction counts of the head and comparison binaries on generated workloads, the one head-versus-base delta that is deterministic on shared runners (advisory above 1.10x, blocking above 1.25x), and it measures peak resident memory of the release CLI against fixed budgets. The job publishes a step summary and retains the samples, the JSON summary, and toolchain context as a diagnostic artifact; adding the `performance` label to a pull request additionally runs the benchmark repository's Criterion lanes for the head and comparison binaries on four parallel runners.
 

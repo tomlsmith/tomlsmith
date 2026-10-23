@@ -13,6 +13,7 @@
   "include": [
     "cli/src/**/*.ts",
     "cli/tests/**/*.ts",
+    "lsp/tests/**/*.ts",
     "scripts/**/*.ts",
     "vitest.config.ts"
   ]
